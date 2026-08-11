@@ -1,0 +1,56 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.9", "3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # Il nucleo (geo, dxcc, rotor, sources, engine, bands) non dipende da Qt:
+      # i test girano senza installare PySide6.
+      - name: Run test suite
+        run: python -m unittest discover -s tests -v
+
+  gui:
+    name: GUI import check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Import GUI headless
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -c "
+          from dxrotator.gui import MainWindow, SettingsDialog
+          from dxrotator.config import AppConfig
+          from PySide6.QtWidgets import QApplication
+          app = QApplication([])
+          cfg = AppConfig()
+          cfg.wsjtx_enabled = False
+          cfg.n1mm_enabled = False
+          w = MainWindow(cfg)
+          SettingsDialog(cfg)
+          w.stop_listeners()
+          print('GUI ok')
+          "
