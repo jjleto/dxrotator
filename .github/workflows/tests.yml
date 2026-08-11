@@ -33,24 +33,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -r requirements.txt
+          cache: pip
+
+      # Anche con la piattaforma "offscreen", libQt6Gui va comunque collegata a
+      # libEGL, libxkbcommon, libdbus e fontconfig, che sul runner non ci sono.
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libdbus-1-3 \
+            libfontconfig1 libfreetype6 libx11-6 libxcb1
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
       - name: Import GUI headless
         env:
           QT_QPA_PLATFORM: offscreen
-        run: |
-          python -c "
-          from dxrotator.gui import MainWindow, SettingsDialog
-          from dxrotator.config import AppConfig
-          from PySide6.QtWidgets import QApplication
-          app = QApplication([])
-          cfg = AppConfig()
-          cfg.wsjtx_enabled = False
-          cfg.n1mm_enabled = False
-          w = MainWindow(cfg)
-          SettingsDialog(cfg)
-          w.stop_listeners()
-          print('GUI ok')
-          "
+        run: python tools/gui_smoke.py
