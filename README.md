@@ -34,7 +34,7 @@ leaving the keyboard.
 Python 3.9 or newer.
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/dxrotator.git
+git clone https://github.com/jjleto/dxrotator.git
 cd dxrotator
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
