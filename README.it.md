@@ -375,6 +375,15 @@ stesso indirizzo qui.
 sorgente non è abilitata nella scheda *Automatismo*, oppure il locatore della
 tua stazione non è impostato.
 
+
+
+## Acknowledgements
+
+Written by IW5DNZ, with Claude (Anthropic) as coding assistant.
+The behaviour of the real DCU-1 documented here — dropped commands, the
+ignored stop, the brake sequence, the positioning error — was measured on the
+air, one reading at a time.
+
 ---
 
 ## Licenza
