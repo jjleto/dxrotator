@@ -2,7 +2,7 @@
 
 [🇮🇹 Versione italiana](README.it.md)
 
-Cross-platform rotator control (Windows · macOS · Linux) is currently tested only for macOS. It is for the **Hy-Gain
+Cross-platform rotator control (Windows · macOS · Linux) for the **Hy-Gain
 T2X / Ham-IV** via the **DCU-1 protocol**, driven by the DX station data that
 **WSJT-X** and **N1MM+** broadcast over UDP.
 
@@ -42,15 +42,45 @@ pip install -r requirements.txt
 python run_dxrotator.py
 ```
 
-Standalone executable:
+On Linux you may need to join the serial group:
+`sudo usermod -a -G dialout $USER` (Debian/Ubuntu) or `-G uucp` (Arch).
+
+## Run it as an app
+
+To launch DXRotator from the Dock or Start menu, with no terminal and no
+virtual environment to activate, build a standalone bundle:
 
 ```bash
 pip install pyinstaller
-python build.py                    # result in dist/
+python build.py
 ```
 
-On Linux you may need to join the serial group:
-`sudo usermod -a -G dialout $USER` (Debian/Ubuntu) or `-G uucp` (Arch).
+| System | Result |
+|--------|--------|
+| macOS | `dist/DXRotator.app` — drag it into Applications |
+| Windows | `dist/DXRotator.exe` |
+| Linux | `dist/DXRotator` |
+
+On macOS the build produces a real `.app` bundle rather than a single-file
+executable: a one-file build has to unpack itself on every launch, and the
+delay is noticeable. Pass `--onefile` if you want one anyway, and `--console`
+to keep a terminal window for diagnostics.
+
+Two macOS notes:
+
+- The app is not code-signed. Built locally it opens normally; if you move it
+  between machines Gatekeeper may block it, and
+  `xattr -dr com.apple.quarantine /Applications/DXRotator.app` clears that.
+- If no data arrives from WSJT-X, authorise DXRotator under **System Settings
+  → Privacy & Security → Local Network**. Recent macOS versions gate UDP and
+  multicast per application, and when you run from a terminal the permission
+  belongs to the terminal, not to DXRotator.
+
+The icon is generated from the compass rose itself:
+
+```bash
+python tools/make_icon.py      # icon.png, icon.iconset/, icon.icns, icon.ico
+```
 
 ## Connecting the rotator
 
@@ -226,16 +256,6 @@ makes this software work on real hardware came from somebody patiently
 measuring what their controller actually did. When reporting, please include
 the first line of the log (it carries the version and the mechanical stop
 setting) and the log around the problem.
-
-
-## Acknowledgements
-
-Written by IW5DNZ, with Claude (Anthropic) as coding assistant.
-The behaviour of the real DCU-1 documented here — dropped commands, the
-ignored stop, the brake sequence, the positioning error — was measured on the
-air, one reading at a time.
-
----
 
 ## License
 

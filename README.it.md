@@ -24,12 +24,41 @@ pip install -r requirements.txt
 python run_dxrotator.py
 ```
 
-Per creare un eseguibile autonomo (senza Python sul PC di destinazione):
+### Avviarlo come applicazione
+
+Per lanciare DXRotator dal Dock o dal menu Start, senza terminale e senza
+ambiente virtuale da attivare:
 
 ```bash
 pip install pyinstaller
 python build.py
-# risultato in dist/
+```
+
+| Sistema | Risultato |
+|---------|-----------|
+| macOS | `dist/DXRotator.app` — trascinala in Applicazioni |
+| Windows | `dist/DXRotator.exe` |
+| Linux | `dist/DXRotator` |
+
+Su macOS viene prodotto un vero bundle `.app` e non un eseguibile singolo: la
+forma a file unico si scompatta a ogni avvio e l'attesa si sente. Con
+`--onefile` lo ottieni comunque, con `--console` resta la finestra di
+terminale per vedere eventuali errori.
+
+Due avvertenze per macOS:
+
+- L'applicazione non è firmata. Costruita da te si apre senza problemi; se la
+  sposti su un altro Mac, Gatekeeper può bloccarla e si sblocca con
+  `xattr -dr com.apple.quarantine /Applications/DXRotator.app`.
+- Se non arrivano i dati da WSJT-X, autorizza DXRotator in **Impostazioni di
+  Sistema → Privacy e sicurezza → Rete locale**. Le versioni recenti di macOS
+  chiedono il permesso per UDP e multicast applicazione per applicazione, e
+  quando lanci dal terminale il permesso è del terminale, non di DXRotator.
+
+L'icona si genera dalla stessa rosa dei venti del quadrante:
+
+```bash
+python tools/make_icon.py     # icon.png, icon.iconset/, icon.icns, icon.ico
 ```
 
 Su Linux può servire aggiungere l'utente al gruppo della porta seriale:
@@ -374,15 +403,6 @@ stesso indirizzo qui.
 **L'automatismo non parte mai.** La differenza è sotto la soglia, oppure la
 sorgente non è abilitata nella scheda *Automatismo*, oppure il locatore della
 tua stazione non è impostato.
-
-
-
-## Acknowledgements
-
-Written by IW5DNZ, with Claude (Anthropic) as coding assistant.
-The behaviour of the real DCU-1 documented here — dropped commands, the
-ignored stop, the brake sequence, the positioning error — was measured on the
-air, one reading at a time.
 
 ---
 
