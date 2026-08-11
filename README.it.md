@@ -1,6 +1,6 @@
 # DXRotator
 
-Software multipiattaforma (Windows · macOS · Linux) per puntare un rotore
+Software multipiattaforma (Windows · macOS · Linux) è attualmente testato solo per macOS. È per puntare un rotore
 **Hy-Gain TX2 / T2X** tramite il **protocollo DCU-1**, usando i dati della
 stazione DX ricevuti via UDP da **WSJT-X** e **N1MM+**.
 
