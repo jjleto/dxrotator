@@ -2,7 +2,7 @@
 
 [🇮🇹 Versione italiana](README.it.md)
 
-Cross-platform rotator control (Windows · macOS · Linux) for the **Hy-Gain
+Cross-platform rotator control (Windows · macOS · Linux) tested only macOS for now for for the **Hy-Gain
 T2X / Ham-IV** via the **DCU-1 protocol**, driven by the DX station data that
 **WSJT-X** and **N1MM+** broadcast over UDP.
 
