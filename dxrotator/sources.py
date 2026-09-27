@@ -157,6 +157,10 @@ class WsjtxDecoder:
         # ultima frequenza vista in un messaggio Status: i messaggi Decode non
         # la contengono, ma servono per capire su che banda si sta operando
         self.last_frequency_hz: int = 0
+        # stazione DX corrente, per non perdere il locatore negli stati
+        # intermedi che WSJT-X emette mentre aggiorna i propri campi
+        self._dx_call: str = ""
+        self._dx_grid: str = ""
 
     def decode(self, data: bytes) -> Optional[DxTarget]:
         try:
@@ -206,14 +210,33 @@ class WsjtxDecoder:
         if freq:
             self.last_frequency_hz = freq
 
-        if not dx_call and not dx_grid:
-            # l'operatore ha svuotato il campo DX Call in WSJT-X (o ha
-            # cambiato banda/configurazione): la stazione DX non c'e' piu'
+        if not dx_call:
+            # L'operatore ha svuotato il campo DX Call in WSJT-X (o ha cambiato
+            # banda/configurazione): la stazione DX non c'e' piu'. Conta solo il
+            # nominativo: mentre aggiorna i campi WSJT-X emette anche stati
+            # intermedi col solo locatore rimasto, che non sono una stazione.
+            self._dx_call = ""
+            self._dx_grid = ""
             return DxTarget(source="WSJT-X", kind="status", cleared=True,
                             mode=mode, frequency_hz=freq)
+
+        # WSJT-X alterna stati con e senza locatore per la stessa stazione.
+        # Senza memoria l'azimut oscillerebbe fra la rotta sul locatore e il
+        # centro dell'entita' DXCC: si conserva l'ultimo locatore visto per
+        # questo nominativo, azzerandolo appena il nominativo cambia.
+        call = dx_call.upper()
+        if call != self._dx_call:
+            self._dx_call = call
+            self._dx_grid = ""
+        grid = dx_grid.upper() if looks_like_grid(dx_grid) else ""
+        if grid:
+            self._dx_grid = grid
+        else:
+            grid = self._dx_grid
+
         return DxTarget(
-            call=dx_call.upper(),
-            grid=dx_grid.upper() if looks_like_grid(dx_grid) else "",
+            call=call,
+            grid=grid,
             source="WSJT-X",
             kind="status",
             mode=mode,

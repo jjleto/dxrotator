@@ -115,9 +115,19 @@ configurable, because behaviour varies between units and clones:
   start-up sequence.
 - **`AM1;` is never sent when the rotator is already stopped**, or the brake
   would release for nothing.
-- **Positioning is not exact.** Expect a few degrees of error from the
-  potentiometer, a long control cable and the antenna's inertia. A constant
-  bias is removed with the calibration offset; the residual scatter is why the
+- **Some units go into standby** and spend the first command they receive on
+  waking the display up, discarding its content. The symptom is again having
+  to press twice, but only after a pause. DXRotator sends a harmless `;` first
+  and waits for the unit to wake, and only does so after a configurable period
+  of silence so it adds no traffic during active use. STOP never waits for the
+  wake-up.
+- **Positioning is not exact, and not symmetric.** Expect a few degrees of
+  error from the potentiometer, a long control cable and the antenna's
+  inertia — and expect it to differ with the direction of travel, because
+  inertia and mechanical backlash act along the way you are turning. On a real
+  T2X: up to 7° when the azimuth increases, no more than 3° when it decreases.
+  A constant bias is removed with the calibration offset, and the asymmetry
+  with the two per-direction corrections. The residual scatter is why the
   safety margin from the mechanical stop matters.
 
 ### Position: read or estimated
@@ -135,7 +145,18 @@ antenna enters the safety margin.
 Otherwise DXRotator **estimates** the position by integrating the rotator's
 nominal speed (6 °/s ≈ 60 s per turn on a T2X). The estimate does not drift
 without bound: every new command resets it to the commanded bearing. Use
-**Recalibrate** whenever you move the rotator from the controller's own knob.
+**Declare** whenever you move the rotator from the controller's own knob.
+
+**Rotation is inhibited until the position is known.** Without it the software
+knows where you want to point but not where you are — so neither the
+direction, nor the travel, nor the distance from the mechanical stop. On the
+very first run the position field is empty and red, the dial reads
+`– – –  posizione ignota`, and every rotation control is disabled: read the
+bearing off the controller, type it in and press **Declare**. STOP always
+stays enabled.
+
+The position is saved when you quit and restored at the next start, so this
+is normally a one-off.
 
 ### Mechanical stop
 
@@ -218,7 +239,7 @@ python tools/send_test.py demo                  # six stations around the globe
 python -m unittest discover -s tests -v
 ```
 
-67 tests covering great-circle bearings against known references, Maidenhead
+92 tests covering great-circle bearings against known references, Maidenhead
 round-trips, DXCC resolution, mechanical-stop geometry, the safety margin, the
 byte-level format of DCU-1 commands, the stop strategies, band classification
 and the WSJT-X / N1MM packet decoders.

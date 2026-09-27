@@ -1,6 +1,6 @@
 # DXRotator
 
-Software multipiattaforma (Windows · macOS · Linux) è attualmente testato solo per macOS. È per puntare un rotore
+Software multipiattaforma (Windows · macOS · Linux) per puntare un rotore
 **Hy-Gain TX2 / T2X** tramite il **protocollo DCU-1**, usando i dati della
 stazione DX ricevuti via UDP da **WSJT-X** e **N1MM+**.
 
@@ -102,6 +102,13 @@ controller preferisce i due comandi separati, togli la spunta a
 Il terminatore e il comando di stop sono configurabili, perché alcuni cloni
 usano `\r` al posto di `;`.
 
+**Standby.** Alcuni DCU-1 dopo un po' di inattività spengono il display e
+consumano il primo comando ricevuto per riaccendersi, ignorandone il
+contenuto: il sintomo è dover premere due volte. DXRotator manda prima un `;`
+innocuo e aspetta che il controller sia sveglio, ma solo dopo un periodo di
+silenzio configurabile, così durante l'uso attivo non aggiunge traffico.
+Lo STOP non passa mai per il risveglio.
+
 ### Posizione corrente: letta o stimata
 
 DXRotator può lavorare in due modi.
@@ -135,10 +142,20 @@ posizione nota.
 
 Perché la stima resti corretta:
 
-1. all'avvio, leggi il quadrante del controller e usa il campo
-   **"Posizione reale del rotore" → Ricalibra**;
+1. leggi il quadrante del controller e usa il campo
+   **"Posizione reale del rotore" → Dichiara**;
 2. rifallo se muovi il rotore a mano dal controller;
 3. regola `Velocità °/s` cronometrando un giro completo.
+
+**Senza posizione nota la rotazione è inibita.** È una scelta voluta: il
+programma saprebbe dove vuoi puntare ma non da dove parti, quindi né il
+verso, né i gradi da percorrere, né quanto sei lontano dal fermo meccanico.
+Al primo avvio il campo è vuoto e rosso, il quadrante scrive
+`– – –  posizione ignota` e tutti i comandi di rotazione sono disabilitati.
+Lo STOP invece resta sempre attivo.
+
+La posizione viene **salvata alla chiusura e ripristinata al riavvio**, quindi
+la dichiarazione si fa una volta sola.
 
 Il fermo meccanico è modellato:
 
@@ -262,7 +279,7 @@ schermo, accanto a WSJT-X, GridTracker e al log.
 
 | Voce | Effetto |
 |------|---------|
-| **Finestra compatta** (Ctrl+K) | caratteri e spaziature ridotti, spariscono preset, registro e le note esplicative |
+| **Finestra compatta** (Ctrl+K) | caratteri e spaziature ridotti, spariscono registro e note esplicative; restano preset e percorso lungo |
 | **Mostra quadrante** | nasconde la rosa dei venti e lascia i soli comandi |
 | **Mostra registro** | nasconde il registro |
 | **Sempre in primo piano** | la finestra non finisce sotto le altre |
@@ -273,7 +290,7 @@ Le dimensioni minime che si ottengono:
 | Modalità | Larghezza × altezza |
 |----------|---------------------|
 | completa | circa 900 × 560 |
-| compatta con quadrante | circa 520 × 320 |
+| compatta con quadrante | circa 540 × 370 |
 | compatta senza quadrante | circa 290 × 320 |
 
 Posizione, dimensioni e scelte del menu Visualizza vengono salvate alla
@@ -374,7 +391,8 @@ dxrotator/
 ├── gui.py        finestra principale e impostazioni (PySide6)
 └── headless.py   modalità senza GUI
 tools/send_test.py  simulatore WSJT-X / N1MM
-tests/test_all.py   67 test (geo, DXCC, DCU-1, arresto, bande, protocolli UDP)
+tests/test_all.py   92 test (geo, DXCC, DCU-1, arresto, risveglio,
+                    bande, posizione, protocolli UDP)
 ```
 
 Test:

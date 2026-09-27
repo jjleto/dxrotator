@@ -55,8 +55,20 @@ def main() -> int:
     # comandi principali contro il simulatore
     win.connect_rotor()
     assert win.engine.controller.state.connected, "simulatore non connesso"
+
+    # all'avvio la posizione e' ignota: la rotazione deve essere bloccata
+    assert not win.engine.controller.state.position_known, \
+        "posizione data per nota senza dichiararla"
+    assert not win.b_go.isEnabled(), "RUOTA attivo a posizione ignota"
+    win._rotate(180.0, "prova")
+    assert win.engine.controller.transport.sent == [], \
+        "comando inviato a posizione ignota"
+
+    # dichiarandola si sblocca tutto
     win.s_calib.setValue(60)
     win._recalibrate()
+    assert win.engine.controller.state.position_known, "posizione non dichiarata"
+    assert win.b_go.isEnabled(), "RUOTA ancora bloccato"
     win._on_target(DxTarget(call="VK3ABC", grid="QF22", source="WSJT-X",
                             kind="status", frequency_hz=14074000))
     assert win.e_dxcall.text() == "VK3ABC", "campo Call non aggiornato"
@@ -65,8 +77,12 @@ def main() -> int:
     win._stop()
     win._tick()
 
-    # svuotamento della stazione DX
+    # svuotamento della stazione DX: prima l'attesa anti-lampeggio, che
+    # assorbe la raffica di stati intermedi di WSJT-X, poi l'azzeramento
     win._on_target(DxTarget(source="WSJT-X", kind="status", cleared=True))
+    assert win.e_dxcall.text() != "", \
+        "azzerato subito: manca l'attesa anti-lampeggio"
+    win._clear_dx()                      # come se l'attesa fosse scaduta
     assert win.e_dxcall.text() == "", "campo Call non azzerato"
 
     # modalita' di visualizzazione
@@ -84,6 +100,10 @@ def main() -> int:
     for i in range(tabs.count()):
         tabs.setCurrentIndex(i)
     dlg.apply_to(cfg)
+
+    # la posizione va ricordata per il prossimo avvio
+    win._remember_position()
+    assert cfg.last_position is not None, "posizione non memorizzata"
 
     win.stop_listeners()
     win.engine.controller.disconnect()

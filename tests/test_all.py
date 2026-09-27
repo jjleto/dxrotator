@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -202,7 +203,8 @@ class TestRotorGeometry(unittest.TestCase):
     def test_safety_margin_clamps(self):
         # impianto reale: fermo a 335 gradi veri, margine 10
         cfg = rotor.RotorConfig(range_start=335.0, range_span=360.0,
-                                safety_margin=10.0, speed_deg_s=6.0)
+                                safety_margin=10.0, speed_deg_s=6.0,
+                                wake_command="")
         c = rotor.Dcu1Controller(cfg, transport=rotor.SimulatedTransport())
         c.connect()
 
@@ -258,6 +260,7 @@ class TestRotorGeometry(unittest.TestCase):
 class TestDcu1(unittest.TestCase):
 
     def _ctrl(self, **kw):
+        kw.setdefault("wake_command", "")     # non e' l'oggetto di queste prove
         cfg = rotor.RotorConfig(**kw)
         t = rotor.SimulatedTransport()
         c = rotor.Dcu1Controller(cfg, transport=t)
@@ -420,6 +423,84 @@ class TestDcu1(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
+class TestPositionKnown(unittest.TestCase):
+    """La rotazione resta inibita finche' la posizione non e' dichiarata."""
+
+    def _ctrl(self, **kw):
+        kw.setdefault("wake_command", "")
+        c = rotor.Dcu1Controller(rotor.RotorConfig(**kw),
+                                 transport=rotor.SimulatedTransport())
+        c.connect()
+        return c, c.transport
+
+    def test_unknown_at_startup(self):
+        c, t = self._ctrl()
+        self.assertFalse(c.state.position_known)
+        self.assertFalse(c.goto(120.0, force=True))
+        self.assertEqual(t.sent, [], "comando inviato a posizione ignota")
+        self.assertIn("ignota", c.state.last_error)
+
+    def test_declaring_unblocks(self):
+        c, t = self._ctrl()
+        c.set_current_bearing(47.0)
+        self.assertTrue(c.state.position_known)
+        self.assertAlmostEqual(c.current_bearing, 47.0, delta=0.5)
+        self.assertTrue(c.goto(120.0, force=True))
+        self.assertTrue(t.sent)
+
+    def test_stop_always_allowed(self):
+        # lo STOP non deve mai essere inibito: e' il comando di sicurezza
+        c, t = self._ctrl(stop_strategy="command", stop_repeat=1)
+        self.assertFalse(c.state.position_known)
+        c.stop(blocking=True)
+        self.assertEqual(t.sent[-1], ";")
+
+    def test_forget_position(self):
+        c, t = self._ctrl()
+        c.set_current_bearing(90.0)
+        c.forget_position()
+        self.assertFalse(c.state.position_known)
+        t.sent.clear()
+        self.assertFalse(c.goto(200.0, force=True))
+        self.assertEqual(t.sent, [])
+
+    def test_out_of_range_declaration_refused(self):
+        c, _ = self._ctrl(range_start=0.0, range_span=180.0)
+        c.set_current_bearing(270.0)          # fuori corsa
+        self.assertFalse(c.state.position_known)
+        c.set_current_bearing(90.0)
+        self.assertTrue(c.state.position_known)
+
+    def test_readback_declares_position(self):
+        import time as _t
+        t = rotor.SimulatedTransport(answer_ai1=True, start=137.0)
+        c = rotor.Dcu1Controller(
+            rotor.RotorConfig(read_position=True, poll_interval=0.15,
+                              read_timeout=0.5, range_start=0.0,
+                              wake_command=""),
+            transport=t)
+        c.connect()
+        deadline = _t.monotonic() + 3.0
+        while _t.monotonic() < deadline and not c.state.position_known:
+            _t.sleep(0.05)
+        self.assertTrue(c.state.position_known)
+        self.assertAlmostEqual(c.current_bearing, 137.0, delta=1.5)
+        c.disconnect()
+
+    def test_config_roundtrip_of_position(self):
+        import tempfile
+        cfg = AppConfig()
+        self.assertIsNone(cfg.last_position)
+        cfg.last_position = 214.5
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "config.json")
+            cfg.save(p)
+            self.assertAlmostEqual(AppConfig.load(p).last_position, 214.5)
+            cfg.last_position = None
+            cfg.save(p)
+            self.assertIsNone(AppConfig.load(p).last_position)
+
+
 class TestReadback(unittest.TestCase):
 
     def test_parse_response(self):
@@ -453,9 +534,11 @@ class TestReadback(unittest.TestCase):
                                      scale_error=0.03)
         cfg = rotor.RotorConfig(range_start=0.0, range_span=360.0,
                                 safety_margin=0.0, read_position=True,
-                                poll_interval=0.2, read_timeout=0.5)
+                                poll_interval=0.2, read_timeout=0.5,
+                                wake_command="")
         c = rotor.Dcu1Controller(cfg, transport=t)
         c.connect()
+        c.set_current_bearing(0.0)          # posizione dichiarata: sblocca
         c.goto(100.0, force=True)
         deadline = _t.monotonic() + 3.0
         while _t.monotonic() < deadline and not c.state.reading:
@@ -475,7 +558,7 @@ class TestReadback(unittest.TestCase):
         cfg = rotor.RotorConfig(range_start=335.0, range_span=360.0,
                                 safety_margin=10.0, read_position=True,
                                 poll_interval=0.15, read_timeout=0.5,
-                                stop_on_margin=True)
+                                stop_on_margin=True, wake_command="")
         c = rotor.Dcu1Controller(cfg, transport=t)
         c.connect()
         c.state.moving = True
@@ -570,7 +653,7 @@ class TestEngine(unittest.TestCase):
         cfg.auto_hold_seconds = 0.0
         for k, v in over.items():
             setattr(cfg, k, v)
-        ctrl = rotor.Dcu1Controller(rotor.RotorConfig(speed_deg_s=1e6),
+        ctrl = rotor.Dcu1Controller(rotor.RotorConfig(speed_deg_s=1e6, wake_command=""),
                                     transport=rotor.SimulatedTransport())
         ctrl.connect()
         return engine.RotatorEngine(cfg, controller=ctrl), ctrl
@@ -684,7 +767,7 @@ class TestBands(unittest.TestCase):
         cfg.auto_rotate = True
         cfg.auto_hold_seconds = 0.0
         cfg.enabled_bands = bands.default_enabled_bands(bands.DIRECTIVE_BANDS)
-        ctrl = rotor.Dcu1Controller(rotor.RotorConfig(speed_deg_s=1e6),
+        ctrl = rotor.Dcu1Controller(rotor.RotorConfig(speed_deg_s=1e6, wake_command=""),
                                     transport=rotor.SimulatedTransport())
         ctrl.connect()
         eng = engine.RotatorEngine(cfg, controller=ctrl)
@@ -735,6 +818,188 @@ class TestClearedStation(unittest.TestCase):
         d = sources.WsjtxDecoder()
         t = d.decode(send_test.wsjtx_status("", "", freq=14074000))
         self.assertEqual(t.frequency_hz, 14074000)
+
+
+class TestGridMemory(unittest.TestCase):
+    """WSJT-X alterna stati con e senza locatore per la stessa stazione."""
+
+    def test_grid_kept_across_states_without_it(self):
+        d = sources.WsjtxDecoder()
+        a = d.decode(send_test.wsjtx_status("M7JVT", "IO94"))
+        self.assertEqual(a.grid, "IO94")
+        # stesso nominativo, locatore momentaneamente assente
+        b = d.decode(send_test.wsjtx_status("M7JVT", ""))
+        self.assertEqual(b.grid, "IO94", "locatore perso fra due stati")
+
+    def test_grid_not_carried_to_another_station(self):
+        d = sources.WsjtxDecoder()
+        d.decode(send_test.wsjtx_status("M7JVT", "IO94"))
+        t = d.decode(send_test.wsjtx_status("R3MBV", ""))
+        self.assertEqual(t.call, "R3MBV")
+        self.assertEqual(t.grid, "", "locatore di un'altra stazione riutilizzato")
+
+    def test_grid_forgotten_after_clear(self):
+        d = sources.WsjtxDecoder()
+        d.decode(send_test.wsjtx_status("M7JVT", "IO94"))
+        d.decode(send_test.wsjtx_status("", ""))          # svuotato
+        t = d.decode(send_test.wsjtx_status("M7JVT", ""))
+        self.assertEqual(t.grid, "", "memoria non azzerata dopo lo svuotamento")
+
+    def test_azimuth_stops_flapping(self):
+        # senza memoria l'azimut oscillava fra rotta sul locatore e centro DXCC
+        cfg = AppConfig()
+        cfg.my_locator = "JN53"
+        eng = engine.RotatorEngine(cfg)
+        d = sources.WsjtxDecoder()
+        az = []
+        for grid in ("IO94", "", "IO94", ""):
+            t = d.decode(send_test.wsjtx_status("M7JVT", grid))
+            az.append(round(eng.solve(t).azimuth, 1))
+        self.assertEqual(len(set(az)), 1, f"azimut oscillante: {az}")
+
+
+class TestDirectionalOffset(unittest.TestCase):
+    """L'errore di posizionamento non e' simmetrico: si corregge per verso."""
+
+    def _ctrl(self, **kw):
+        kw.setdefault("wake_command", "")
+        kw.setdefault("range_start", 335.0)
+        kw.setdefault("safety_margin", 0.0)
+        c = rotor.Dcu1Controller(rotor.RotorConfig(**kw),
+                                 transport=rotor.SimulatedTransport())
+        c.connect()
+        return c, c.transport
+
+    def test_correction_depends_on_direction(self):
+        # misure reali su T2X: +7 salendo, +3 scendendo -> si compensa al negativo
+        c, t = self._ctrl(offset_up=-7.0, offset_down=-3.0)
+
+        # 180 -> 320: azimut crescente, comanda 313
+        c.set_current_bearing(180.0)
+        c.goto(320.0, force=True)
+        self.assertEqual(t.sent[-1], "AP1313;AM1;")
+
+        # 240 -> 0: azimut calante, comanda 357
+        t.sent.clear()
+        c.set_current_bearing(240.0)
+        c.goto(0.0, force=True)
+        self.assertEqual(t.sent[-1], "AP1357;AM1;")
+
+    def test_constant_offset_still_applies(self):
+        c, t = self._ctrl(offset=-4.0, offset_up=-3.0, offset_down=0.0)
+        c.set_current_bearing(180.0)
+        c.goto(320.0, force=True)          # crescente: -4 -4... no: -4 + -3 = -7
+        self.assertEqual(t.sent[-1], "AP1313;AM1;")
+
+    def test_no_correction_without_settings(self):
+        c, t = self._ctrl()
+        c.set_current_bearing(180.0)
+        c.goto(320.0, force=True)
+        self.assertEqual(t.sent[-1], "AP1320;AM1;")
+
+    def test_correction_wraps(self):
+        # la correzione non deve produrre azimut negativi o sopra 359
+        c, t = self._ctrl(offset_down=-5.0)
+        c.set_current_bearing(20.0)
+        c.goto(2.0, force=True)            # calante: 2 - 5 = -3 -> 357
+        self.assertEqual(t.sent[-1], "AP1357;AM1;")
+
+    def test_estimate_follows_the_request_not_the_command(self):
+        # la lancetta deve puntare dove hai chiesto, non dove e' stato comandato
+        c, _ = self._ctrl(offset_up=-7.0, speed_deg_s=1e6)
+        c.set_current_bearing(180.0)
+        c.goto(320.0, force=True)
+        time.sleep(0.05)
+        c.tick()
+        self.assertAlmostEqual(c.current_bearing, 320.0, delta=0.5)
+
+
+class TestWakeFromStandby(unittest.TestCase):
+    """Il controller in standby consuma il primo comando per riaccendersi."""
+
+    def _ctrl(self, **kw):
+        kw.setdefault("wake_delay", 0.0)
+        kw.setdefault("wake_resend", False)
+        kw.setdefault("send_move_with_target", True)
+        c = rotor.Dcu1Controller(rotor.RotorConfig(**kw),
+                                 transport=rotor.SimulatedTransport())
+        c.connect()
+        c.set_current_bearing(100.0)
+        return c, c.transport
+
+    def test_wake_sent_before_first_command(self):
+        # nessuna trasmissione precedente: il controller e' da considerare
+        # addormentato, quindi il ';' di risveglio precede il comando.
+        # La soglia e' altissima proprio per provare che il primo comando
+        # sveglia comunque, senza calcolare inattivita' inventate.
+        c, t = self._ctrl(wake_after_idle=100000.0)
+        t.sent.clear()
+        c.goto(200.0, force=True)
+        self.assertEqual(t.sent, [";", "AP1200;AM1;"])
+
+    def test_no_wake_when_recently_active(self):
+        c, t = self._ctrl(wake_after_idle=15.0)
+        c.goto(200.0, force=True)          # questo sveglia
+        t.sent.clear()
+        c.goto(250.0, force=True)          # subito dopo: niente risveglio
+        self.assertEqual(t.sent, ["AP1250;AM1;"])
+
+    def test_wake_again_after_silence(self):
+        c, t = self._ctrl(wake_after_idle=0.2)
+        c.goto(200.0, force=True)
+        time.sleep(0.25)
+        t.sent.clear()
+        c.goto(250.0, force=True)
+        self.assertEqual(t.sent, [";", "AP1250;AM1;"])
+
+    def test_wake_disabled_by_empty_command(self):
+        c, t = self._ctrl(wake_command="", wake_after_idle=0.0)
+        t.sent.clear()
+        c.goto(200.0, force=True)
+        self.assertEqual(t.sent, ["AP1200;AM1;"])
+
+    def test_wake_resend_repeats_only_after_a_wake(self):
+        # dopo il risveglio la coppia parte due volte, come il doppio click
+        c, t = self._ctrl(wake_after_idle=100000.0, wake_resend=True)
+        t.sent.clear()
+        c.goto(200.0, force=True)
+        self.assertEqual(t.sent, [";", "AP1200;AM1;", "AP1200;AM1;"])
+        # a controller sveglio nessuna ripetizione: non si disturba una
+        # rotazione gia' in corso
+        t.sent.clear()
+        c.goto(250.0, force=True)
+        self.assertEqual(t.sent, ["AP1250;AM1;"])
+
+    def test_wake_does_not_delay_stop(self):
+        # lo stop e' il comando di sicurezza: non deve mai aspettare il risveglio
+        c, t = self._ctrl(wake_after_idle=0.0, stop_strategy="command",
+                          stop_repeat=1)
+        t.sent.clear()
+        c.stop(blocking=True)
+        self.assertEqual(t.sent, [";"])
+
+
+class TestStatusClearedOnEmptyCall(unittest.TestCase):
+    """Mentre aggiorna i campi WSJT-X emette stati intermedi."""
+
+    def test_grid_without_call_is_a_clear(self):
+        d = sources.WsjtxDecoder()
+        t = d.decode(send_test.wsjtx_status("", "EN74"))
+        self.assertTrue(t.cleared, "stato col solo locatore non trattato come vuoto")
+        self.assertFalse(t.call)
+
+    def test_call_with_grid_is_a_station(self):
+        d = sources.WsjtxDecoder()
+        t = d.decode(send_test.wsjtx_status("KJ4KFJ", "EN74"))
+        self.assertFalse(t.cleared)
+        self.assertEqual(t.call, "KJ4KFJ")
+        self.assertEqual(t.grid, "EN74")
+
+    def test_call_without_grid_is_a_station(self):
+        d = sources.WsjtxDecoder()
+        t = d.decode(send_test.wsjtx_status("KJ4KFJ", ""))
+        self.assertFalse(t.cleared)
+        self.assertEqual(t.call, "KJ4KFJ")
 
 
 class TestConfig(unittest.TestCase):

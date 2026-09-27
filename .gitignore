@@ -26,3 +26,4 @@ Thumbs.db
 # Dati locali dell'utente
 config.json
 cty.dat
+*.zip

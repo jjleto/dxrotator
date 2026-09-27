@@ -35,6 +35,14 @@ APP_TITLE = f"DXRotator {__version__} — controllo Hy-Gain TX2 via DCU-1"
 # prima che le sorgenti esterne tornino ad aggiornarli
 MANUAL_EDIT_GRACE = 10.0
 
+# valore sentinella del campo posizione: mostrato come casella vuota,
+# significa "posizione del rotore ignota"
+POSITION_UNSET = -1.0
+
+# secondi di attesa prima di azzerare il riquadro Stazione DX quando WSJT-X
+# segnala il campo vuoto: assorbe la raffica di stati intermedi
+CLEAR_DEBOUNCE = 2.5
+
 DARK_QSS = """
 QWidget { background-color: #14171c; color: #dde3ec; font-size: 13px; }
 QGroupBox { border: 1px solid #2c333d; border-radius: 8px; margin-top: 10px;
@@ -211,6 +219,15 @@ class SettingsDialog(QDialog):
         self.s_span.setValue(self.cfg.rotor_range_span)
         self.s_off = QDoubleSpinBox(); self.s_off.setRange(-180, 180)
         self.s_off.setValue(self.cfg.rotor_offset)
+        self.s_offup = QDoubleSpinBox(); self.s_offup.setRange(-45, 45)
+        self.s_offup.setDecimals(0); self.s_offup.setValue(self.cfg.rotor_offset_up)
+        self.s_offup.setToolTip("Correzione applicata quando il rotore gira "
+                                "verso azimut crescenti (es. 180 → 320).\n"
+                                "Se arriva a 327 invece che a 320, metti -7.")
+        self.s_offdown = QDoubleSpinBox(); self.s_offdown.setRange(-45, 45)
+        self.s_offdown.setDecimals(0); self.s_offdown.setValue(self.cfg.rotor_offset_down)
+        self.s_offdown.setToolTip("Correzione applicata quando il rotore gira "
+                                  "verso azimut calanti (es. 240 → 0).")
         self.s_speed = QDoubleSpinBox(); self.s_speed.setRange(0.1, 60)
         self.s_speed.setDecimals(2); self.s_speed.setValue(self.cfg.rotor_speed)
         self.s_minmove = QDoubleSpinBox(); self.s_minmove.setRange(0, 45)
@@ -243,12 +260,31 @@ class SettingsDialog(QDialog):
         self.s_stgap.setValue(self.cfg.stop_repeat_gap)
         f.addRow("  tentativi di arresto:", self.s_streps)
         f.addRow("  pausa fra i tentativi (s):", self.s_stgap)
+
+        self.e_wake = QLineEdit(self.cfg.wake_command)
+        self.e_wake.setToolTip("Comando innocuo inviato per far uscire il "
+                               "controller dallo standby. Vuoto = disattivato.")
+        self.s_wakedelay = QDoubleSpinBox(); self.s_wakedelay.setRange(0.0, 5.0)
+        self.s_wakedelay.setDecimals(1); self.s_wakedelay.setSingleStep(0.1)
+        self.s_wakedelay.setValue(self.cfg.wake_delay)
+        self.s_wakeidle = QDoubleSpinBox(); self.s_wakeidle.setRange(0.0, 600.0)
+        self.s_wakeidle.setDecimals(0); self.s_wakeidle.setSingleStep(5)
+        self.s_wakeidle.setValue(self.cfg.wake_after_idle)
+        f.addRow("Comando di risveglio:", self.e_wake)
+        f.addRow("  attesa dopo il risveglio (s):", self.s_wakedelay)
+        f.addRow("  dopo quanti s di silenzio:", self.s_wakeidle)
+        self.c_wakeresend = QCheckBox("Dopo il risveglio ripeti il comando "
+                                      "(equivale al doppio click)")
+        self.c_wakeresend.setChecked(self.cfg.wake_resend)
+        f.addRow("", self.c_wakeresend)
         f.addRow("", self.c_combined)
         f.addRow("Pausa fra AP1 e AM1 (s):", self.s_gap)
         f.addRow("Fermo meccanico (°):", self.s_start)
         f.addRow("Escursione (°):", self.s_span)
         f.addRow("Margine dal fermo (°):", self.s_margin)
         f.addRow("Offset di taratura (°):", self.s_off)
+        f.addRow("  in più, azimut crescente (°):", self.s_offup)
+        f.addRow("  in più, azimut calante (°):", self.s_offdown)
         f.addRow("Velocità (°/s):", self.s_speed)
         f.addRow("Movimento minimo (°):", self.s_minmove)
         f.addRow("", self.c_autoconn)
@@ -427,11 +463,17 @@ class SettingsDialog(QDialog):
         cfg.stop_strategy = self._stop_modes[self.cb_stopmode.currentIndex()][0]
         cfg.stop_repeat = self.s_streps.value()
         cfg.stop_repeat_gap = self.s_stgap.value()
+        cfg.wake_command = self.e_wake.text()
+        cfg.wake_delay = self.s_wakedelay.value()
+        cfg.wake_after_idle = self.s_wakeidle.value()
+        cfg.wake_resend = self.c_wakeresend.isChecked()
         cfg.send_move_with_target = self.c_combined.isChecked()
         cfg.command_gap = self.s_gap.value()
         cfg.rotor_range_start = self.s_start.value()
         cfg.rotor_range_span = self.s_span.value()
         cfg.rotor_offset = self.s_off.value()
+        cfg.rotor_offset_up = self.s_offup.value()
+        cfg.rotor_offset_down = self.s_offdown.value()
         cfg.rotor_speed = self.s_speed.value()
         cfg.rotor_min_move = self.s_minmove.value()
         cfg.rotor_safety_margin = self.s_margin.value()
@@ -477,6 +519,7 @@ class MainWindow(QMainWindow):
         self._last_manual_edit = 0.0
         self._last_rx_key = ""
         self._last_band_block: object = None
+        self._position_known_shown: object = None
         self._pending_log: List[str] = []
 
         # il ponte va creato prima del motore: _apply_rotor_config lo usa
@@ -493,6 +536,11 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._apply_view()
         self._restore_geometry()
+        self._restore_position()
+
+        self._clear_timer = QTimer(self)
+        self._clear_timer.setSingleShot(True)
+        self._clear_timer.timeout.connect(self._clear_dx)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
@@ -525,14 +573,29 @@ class MainWindow(QMainWindow):
         self.lbl_calib = QLabel("Posizione reale del rotore:")
         cal.addWidget(self.lbl_calib)
         self.s_calib = QDoubleSpinBox()
-        self.s_calib.setRange(0, 359.9); self.s_calib.setSuffix(" °")
-        self.s_calib.setDecimals(0); self.s_calib.setSingleStep(1)
+        # il minimo e' un valore sentinella: mostrato come casella vuota, vuol
+        # dire "posizione ignota" e tiene la rotazione inibita
+        self.s_calib.setRange(POSITION_UNSET, 359)
+        self.s_calib.setSuffix(" °")
+        self.s_calib.setDecimals(0)
+        self.s_calib.setSingleStep(1)
+        # Qt disabilita il testo speciale se e' la stringa vuota: uno spazio
+        # ottiene la casella visivamente vuota che serve qui
+        self.s_calib.setSpecialValueText(" ")
+        self.s_calib.setValue(POSITION_UNSET)
+        self.s_calib.setToolTip("Leggi l'azimut sul quadrante del controller e "
+                                "scrivilo qui, poi premi Invio o Dichiara.\n"
+                                "Finché è vuoto la rotazione resta bloccata.")
+        # Invio dichiara la posizione senza dover andare fino al pulsante
+        edit = self.s_calib.lineEdit()
+        if edit is not None:
+            edit.returnPressed.connect(self._recalibrate)
         cal.addWidget(self.s_calib)
-        b_cal = QPushButton("Ricalibra")
-        b_cal.setToolTip("Allinea la posizione stimata a quella indicata dal "
-                         "quadrante del controller (non muove il rotore)")
-        b_cal.clicked.connect(self._recalibrate)
-        cal.addWidget(b_cal)
+        self.b_cal = QPushButton("Dichiara")
+        self.b_cal.setToolTip("Allinea la posizione nota a quella indicata dal "
+                              "quadrante del controller (non muove il rotore)")
+        self.b_cal.clicked.connect(self._recalibrate)
+        cal.addWidget(self.b_cal)
         self.b_test = QPushButton("Prova lettura posizione")
         self.b_test.setToolTip("Invia AI1; e mostra cosa risponde il controller")
         self.b_test.clicked.connect(self._test_readback)
@@ -635,8 +698,10 @@ class MainWindow(QMainWindow):
         self.s_manual.setSuffix(" °")
         self.s_manual.setDecimals(0)
         self.s_manual.setSingleStep(1)
-        b_send = QPushButton("Vai")
-        b_send.clicked.connect(lambda: self._rotate(self.s_manual.value(), "manuale"))
+        self.b_send = QPushButton("Vai")
+        self.b_send.clicked.connect(
+            lambda: self._rotate(self.s_manual.value(), "manuale"))
+        b_send = self.b_send
         self.b_stop = QPushButton("STOP")
         self.b_stop.setObjectName("stop")
         self.b_stop.setToolTip("Arresto immediato (Esc)")
@@ -649,12 +714,15 @@ class MainWindow(QMainWindow):
 
         prow = QHBoxLayout()
         prow.setContentsMargins(0, 0, 0, 0)
+        self._preset_buttons = []
         for name, az in self.cfg.presets.items():
             b = QPushButton(f"{name}\n{az:.0f}°")
             b.setMinimumHeight(38)
             b.setMinimumWidth(40)
+            b.setToolTip(f"{name} — ruota a {az:.0f}°")
             b.clicked.connect(lambda _=False, a=az, n=name: self._rotate(a, f"preset {n}"))
             prow.addWidget(b)
+            self._preset_buttons.append((b, name, az))
         self.presets_widget = QWidget()
         self.presets_widget.setLayout(prow)
         lay.addWidget(self.presets_widget, 1, 0, 1, 4)
@@ -679,6 +747,9 @@ class MainWindow(QMainWindow):
         self.lbl_auto = QLabel("in attesa di dati")
         self.lbl_auto.setObjectName("sub")
         self.lbl_auto.setWordWrap(True)
+        # spazio per due righe: i messaggi lunghi altrimenti sbordano dal riquadro
+        self.lbl_auto.setMinimumHeight(34)
+        self.lbl_auto.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
         self.lbl_thr = QLabel("Ruota solo se la differenza supera:")
         self.lbl_thr.setWordWrap(True)
@@ -784,15 +855,19 @@ class MainWindow(QMainWindow):
         self.log_panel.setVisible(self.cfg.show_log and not compact)
         self.compass_panel.setVisible(self.cfg.show_compass)
 
-        # in compatto spariscono le cose che si usano di rado e che allargano
-        self.presets_widget.setVisible(not compact)
+        # In compatto restano i preset e il percorso lungo, che si usano
+        # mentre si opera; i pulsanti perdono la riga dei gradi, che resta
+        # nel suggerimento. Sparisce solo la diagnostica.
+        self.presets_widget.setVisible(True)
+        for b, name, az in self._preset_buttons:
+            b.setText(name if compact else f"{name}\n{az:.0f}°")
+            b.setMinimumHeight(24 if compact else 38)
         self.b_test.setVisible(not compact)
-        self.lbl_calib.setText("Posizione:" if compact
-                               else "Posizione reale del rotore:")
         self.lbl_thr.setText("Soglia:" if compact
                              else "Ruota solo se la differenza supera:")
         self.lbl_info.setVisible(not compact)
-        self.c_lp.setVisible(not compact)
+        self.c_lp.setText("Percorso lungo" if compact
+                          else "Percorso lungo (long path)")
         for w in (self.e_dxcall, self.e_dxgrid):
             w.setMinimumWidth(56 if compact else 72)
 
@@ -804,6 +879,8 @@ class MainWindow(QMainWindow):
             lay.setSpacing(4 if compact else 12)
         self.right_layout.setSpacing(4 if compact else 10)
         self.statusBar().setVisible(not compact)
+        # l'etichetta della posizione dipende anche dallo stato noto/ignoto
+        self._update_position_ui(force=True)
 
         self.a_compact.setChecked(compact)
         self.a_showlog.setChecked(self.cfg.show_log)
@@ -827,12 +904,18 @@ class MainWindow(QMainWindow):
             stop_strategy=c.stop_strategy,
             stop_repeat=c.stop_repeat,
             stop_repeat_gap=c.stop_repeat_gap,
+            wake_command=c.wake_command,
+            wake_delay=c.wake_delay,
+            wake_after_idle=c.wake_after_idle,
+            wake_resend=c.wake_resend,
             send_move_with_target=c.send_move_with_target,
             command_gap=c.command_gap,
             settle_delay=c.settle_delay,
             range_start=c.rotor_range_start,
             range_span=c.rotor_range_span,
             offset=c.rotor_offset,
+            offset_up=c.rotor_offset_up,
+            offset_down=c.rotor_offset_down,
             speed_deg_s=c.rotor_speed,
             min_move=c.rotor_min_move,
             safety_margin=c.rotor_safety_margin,
@@ -912,6 +995,10 @@ class MainWindow(QMainWindow):
             self.a_conn.setText("Connetti")
 
     def _rotate(self, azimuth: float, why: str) -> None:
+        if not self.engine.controller.state.position_known:
+            self._log("rotazione bloccata: la posizione del rotore è ignota", "!")
+            self.s_calib.setFocus()
+            return
         if not self.engine.controller.state.connected:
             self.connect_rotor()
             if not self.engine.controller.state.connected:
@@ -929,8 +1016,68 @@ class MainWindow(QMainWindow):
             self.engine.controller.stop()
             self._log("STOP inviato")
 
+    # ------------------------------------------------------------------
+    # posizione nota / ignota
+    # ------------------------------------------------------------------
+    def _declared_position(self) -> Optional[float]:
+        """Valore del campo posizione, None se lasciato vuoto."""
+        value = self.s_calib.value()
+        return None if value <= POSITION_UNSET + 0.5 else float(value)
+
     def _recalibrate(self) -> None:
-        self.engine.controller.set_current_bearing(self.s_calib.value())
+        value = self._declared_position()
+        if value is None:
+            self._log("posizione non dichiarata: scrivi l'azimut letto sul "
+                      "quadrante del controller", "!")
+            self.s_calib.setFocus()
+            return
+        self.engine.controller.set_current_bearing(value)
+        self._update_position_ui(force=True)
+
+    def _update_position_ui(self, force: bool = False) -> None:
+        """
+        Riflette nell'interfaccia lo stato "posizione nota / ignota":
+        casella rossa e comandi di rotazione disabilitati finché manca.
+        Lo STOP resta sempre attivo.
+        """
+        known = self.engine.controller.state.position_known
+        if not force and known == self._position_known_shown:
+            return
+        self._position_known_shown = known
+
+        self.s_calib.setStyleSheet(
+            "" if known else
+            "border: 1px solid #c0392b; background-color: #3a1f22;")
+        self.lbl_calib.setStyleSheet("" if known else "color: #ff6961;")
+
+        for w in (self.b_go, self.b_send, self.presets_widget):
+            w.setEnabled(known)
+        self.compass.setEnabled(known)
+        self.compass.setCursor(Qt.CrossCursor if known else Qt.ForbiddenCursor)
+
+        if known:
+            self.lbl_calib.setText("Posizione:" if self.cfg.compact_mode
+                                   else "Posizione reale del rotore:")
+        else:
+            self.lbl_calib.setText("Posizione ignota →")
+            self.lbl_auto.setText("rotazione bloccata: posizione ignota")
+
+    def _restore_position(self) -> None:
+        """Riprende la posizione salvata alla chiusura precedente."""
+        saved = self.cfg.last_position
+        if saved is None:
+            self._log("posizione del rotore ignota: leggila sul controller, "
+                      "scrivila nel campo Posizione e premi Dichiara", "!")
+            self._update_position_ui(force=True)
+            return
+        self.engine.controller.set_current_bearing(float(saved))
+        self.s_calib.setValue(round(float(saved)))
+        self._update_position_ui(force=True)
+
+    def _remember_position(self) -> None:
+        ctrl = self.engine.controller
+        self.cfg.last_position = (round(ctrl.current_bearing, 1)
+                                  if ctrl.state.position_known else None)
 
     def _raw_console(self) -> None:
         """Console per provare comandi arbitrari sul controller."""
@@ -1147,10 +1294,14 @@ class MainWindow(QMainWindow):
         tag = f"{target.source}/{target.kind}"
 
         # La sorgente ha svuotato la stazione DX (campo DX Call cancellato in
-        # WSJT-X, cambio banda o configurazione): si azzera anche qui.
+        # WSJT-X, cambio banda o configurazione). Non si azzera subito: mentre
+        # aggiorna i propri campi WSJT-X emette una raffica di stati, alcuni
+        # momentaneamente vuoti, e azzerare a ogni colpo farebbe lampeggiare
+        # il riquadro. Un nuovo target valido annulla l'azzeramento in attesa.
         if target.cleared:
-            self._clear_dx()
+            self._clear_timer.start(int(CLEAR_DEBOUNCE * 1000))
             return
+        self._clear_timer.stop()
 
         # Banda non abilitata: l'antenna di quella banda non e' sul rotatore.
         allowed, band = self.engine.band_allowed(target)
@@ -1241,6 +1392,7 @@ class MainWindow(QMainWindow):
             stop_bearing=self.cfg.rotor_range_start,
             span=self.cfg.rotor_range_span,
             blind=blind_sector(ctrl.cfg),
+            known=ctrl.state.position_known,
         )
         if sol:
             d = angular_difference(ctrl.current_bearing, sol.azimuth)
@@ -1253,6 +1405,7 @@ class MainWindow(QMainWindow):
             age = time.time() - l.last_packet_at if l.last_packet_at else None
             mark = "●" if (age is not None and age < 15) else "○"
             bits.append(f"{mark} {l.label} {l.packets}")
+        self._update_position_ui()
         self.lbl_udp.setText("UDP: " + ("  ".join(bits) if bits else "—"))
         self._update_conn_label()
 
@@ -1302,6 +1455,7 @@ class MainWindow(QMainWindow):
         self.stop_listeners()
         self.engine.controller.disconnect()
         self._save_geometry()
+        self._remember_position()
         try:
             self.cfg.save()
         except Exception:

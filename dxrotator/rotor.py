@@ -68,10 +68,25 @@ class RotorConfig:
     stop_repeat: int = 3              # quante volte insistere
     stop_repeat_gap: float = 0.6      # pausa fra un tentativo e il successivo
 
+    # Risveglio dallo standby. Alcuni DCU-1 spengono il display dopo un po' di
+    # inattivita' e consumano il primo comando ricevuto per riaccendersi,
+    # ignorandone il contenuto: il sintomo e' dover premere due volte. Si manda
+    # allora prima un comando innocuo (';', che a rotore fermo non fa nulla),
+    # si attende che il controller sia sveglio, e solo dopo il comando vero.
+    wake_command: str = ";"           # vuoto = risveglio disattivato
+    wake_delay: float = 0.6           # attesa dopo il comando di risveglio
+    wake_after_idle: float = 15.0     # sveglia solo dopo tanti secondi di silenzio
+    wake_resend: bool = True          # dopo un risveglio manda il comando due volte
+
     # geometria / meccanica
     range_start: float = 180.0        # bearing del fermo meccanico (180 = Nord centrato)
     range_span: float = 360.0         # escursione totale in gradi (360 o 450)
     offset: float = 0.0               # correzione di calibrazione, sommata al comando
+    # L'errore di posizionamento non e' simmetrico: inerzia e giochi meccanici
+    # agiscono nel verso di marcia, quindi si corregge separatamente. Valori
+    # tipici misurati su un T2X: -7 salendo, -3 scendendo.
+    offset_up: float = 0.0            # in piu', quando l'azimut cresce
+    offset_down: float = 0.0          # in piu', quando l'azimut cala
     speed_deg_s: float = 6.0          # velocita' nominale (T2X ~ 6 gradi/s)
     safety_margin: float = 10.0       # gradi da tenere liberi a ogni estremo corsa
 
@@ -377,6 +392,12 @@ class RotorState:
     last_command: str = ""
     last_error: str = ""
     history: List[str] = field(default_factory=list)
+    # La posizione del rotore non e' misurabile finche' l'operatore non la
+    # dichiara (o finche' non arriva da una lettura). Senza, ogni comando di
+    # rotazione sarebbe un salto nel buio: si conoscerebbe la destinazione ma
+    # non il percorso, quindi ne' il verso, ne' il tempo, ne' la distanza dal
+    # fermo meccanico. Per questo la rotazione resta inibita.
+    position_known: bool = False
     # lettura di posizione
     reading: bool = False         # polling attivo e funzionante
     last_read: Optional[float] = None
@@ -414,6 +435,11 @@ class Dcu1Controller:
         self._poll_thread: Optional[threading.Thread] = None
         self._poll_stop = threading.Event()
         self._margin_hits = 0
+        # momento dell'ultima trasmissione: serve a capire se il controller
+        # ha avuto il tempo di andare in standby. None = mai trasmesso.
+        # Non si usa 0.0: time.monotonic() parte dall'avvio della macchina,
+        # e la differenza darebbe giorni di finta inattivita'.
+        self._last_tx_at: Optional[float] = None
 
     # -- eventi -----------------------------------------------------------
     def _emit(self, msg: str) -> None:
@@ -482,6 +508,7 @@ class Dcu1Controller:
         try:
             self._transport.write(payload.encode("ascii", "replace"))
             self.state.last_command = payload
+            self._last_tx_at = time.monotonic()
             self._emit(f"TX: {payload}")
             return True
         except Exception as exc:
@@ -496,6 +523,12 @@ class Dcu1Controller:
         force=True ignora la soglia `min_move`.
         """
         with self._lock:
+            if not self.state.position_known:
+                self.state.last_error = (
+                    "posizione del rotore ignota")
+                self._emit(f"IGNORATO ({bearing:.0f}°): {self.state.last_error}")
+                return False
+
             bearing = normalize_deg(bearing)
             u = bearing_to_rotor(bearing, self.cfg, near=self._u_current)
             if u is None:
@@ -517,7 +550,7 @@ class Dcu1Controller:
                 self._emit(f"IGNORATO: differenza < {self.cfg.min_move:.0f}°")
                 return False
 
-            ok = self._send_goto(bearing)
+            ok = self._send_goto(bearing, u - self._u_current)
             if ok:
                 self._u_target = u
                 self.state.target = bearing
@@ -525,10 +558,50 @@ class Dcu1Controller:
                 self._last_tick = time.monotonic()
             return ok
 
-    def _send_goto(self, bearing: float) -> bool:
-        """Trasmette la coppia AP1/AM1 verso `bearing` (gia' normalizzato)."""
+    def _wake_if_idle(self) -> bool:
+        """
+        Sveglia il controller se e' rimasto in silenzio abbastanza a lungo da
+        essere andato in standby. Restituisce True se ha davvero svegliato.
+
+        Il comando di risveglio viene buttato via dal controller, che lo usa
+        per riaccendere il display: per questo si manda prima, e da solo.
+        """
+        if not self.cfg.wake_command:
+            return False
+        if self._last_tx_at is None:
+            # mai trasmesso in questa sessione: il controller va considerato
+            # addormentato a prescindere
+            self._emit("Risveglio del controller (prima trasmissione)")
+        else:
+            idle = time.monotonic() - self._last_tx_at
+            if idle < max(0.0, self.cfg.wake_after_idle):
+                return False
+            self._emit(f"Risveglio del controller dopo {idle:.0f} s di inattività")
+        self._send(self.cfg.wake_command)
+        if self.cfg.wake_delay > 0:
+            time.sleep(self.cfg.wake_delay)
+        return True
+
+    def _correction(self, delta_u: float) -> float:
+        """
+        Correzione totale da sommare all'azimut comandato.
+
+        Oltre all'offset costante si applica una correzione che dipende dal
+        verso di marcia: l'errore di posizionamento di questi rotori non e'
+        simmetrico, perche' inerzia e giochi meccanici agiscono nel verso in
+        cui si sta girando.
+        """
+        corr = self.cfg.offset
+        if delta_u > 0:
+            corr += self.cfg.offset_up
+        elif delta_u < 0:
+            corr += self.cfg.offset_down
+        return corr
+
+    def _transmit_goto(self, bearing: float, delta_u: float = 0.0) -> bool:
+        """Manda la coppia AP1/AM1, senza risveglio ne' ripetizioni."""
         term = self.cfg.terminator
-        cmd = int(round(normalize_deg(bearing + self.cfg.offset))) % 360
+        cmd = int(round(normalize_deg(bearing + self._correction(delta_u)))) % 360
         if self.cfg.send_move_with_target:
             return self._send(f"AP1{cmd:03d}{term}AM1{term}")
         if not self._send(f"AP1{cmd:03d}{term}"):
@@ -536,6 +609,25 @@ class Dcu1Controller:
         if self.cfg.command_gap > 0:
             time.sleep(self.cfg.command_gap)
         return self._send(f"AM1{term}")
+
+    def _send_goto(self, bearing: float, delta_u: float = 0.0) -> bool:
+        """
+        Trasmette il comando di rotazione verso `bearing` (gia' normalizzato).
+
+        Se il controller era addormentato e `wake_resend` e' attivo, la coppia
+        viene mandata due volte: su alcuni esemplari il risveglio consuma piu'
+        di un comando, ed e' la stessa cosa che fa l'operatore quando preme due
+        volte. La ripetizione avviene solo dopo un risveglio, cioe' quando il
+        primo comando era probabilmente perso: non interrompe mai una rotazione
+        gia' avviata durante l'uso attivo.
+        """
+        woke = self._wake_if_idle()
+        ok = self._transmit_goto(bearing, delta_u)
+        if ok and woke and self.cfg.wake_resend:
+            time.sleep(max(0.2, self.cfg.wake_delay))
+            self._emit("Ripeto il comando dopo il risveglio")
+            ok = self._transmit_goto(bearing, delta_u) or ok
+        return ok
 
     def stop(self, blocking: bool = False) -> bool:
         """
@@ -705,6 +797,8 @@ class Dcu1Controller:
                 return
             self._u_current = u
             self.state.current = self.current_bearing
+            # una lettura vera vale quanto una dichiarazione dell'operatore
+            self.state.position_known = True
             if self._u_target is not None and abs(u - self._u_target) <= 2.0:
                 self.state.moving = False
 
@@ -780,15 +874,35 @@ class Dcu1Controller:
             self.state.current = self.current_bearing
 
     def set_current_bearing(self, bearing: float) -> None:
-        """Ricalibra manualmente la posizione stimata (senza muovere il rotore)."""
+        """
+        Dichiara la posizione del rotore (senza muoverlo).
+
+        E' anche il modo in cui la posizione diventa "nota" e la rotazione
+        viene sbloccata.
+        """
         with self._lock:
             u = bearing_to_rotor(normalize_deg(bearing), self.cfg,
                                  near=self._u_current)
             if u is None:
+                self.state.last_error = (
+                    f"{bearing:.0f}° fuori dall'escursione del rotore")
+                self._emit(f"POSIZIONE RIFIUTATA: {self.state.last_error}")
                 return
             self._u_current = u
             self.state.current = self.current_bearing
-            self._emit(f"Posizione ricalibrata a {self.current_bearing:.0f}°")
+            was_unknown = not self.state.position_known
+            self.state.position_known = True
+            self._emit(f"Posizione {'dichiarata' if was_unknown else 'ricalibrata'} "
+                       f"a {self.current_bearing:.0f}°")
+
+    def forget_position(self) -> None:
+        """Dimentica la posizione: la rotazione torna inibita."""
+        with self._lock:
+            self.state.position_known = False
+            self.state.moving = False
+            self._u_target = None
+            self.state.target = None
+            self._emit("Posizione del rotore dichiarata ignota: rotazione inibita")
 
     @property
     def current_bearing(self) -> float:

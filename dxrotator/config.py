@@ -13,7 +13,7 @@ import json
 import os
 import sys
 from dataclasses import asdict, dataclass, field, fields
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .bands import BAND_NAMES, default_enabled_bands
 
@@ -54,18 +54,29 @@ class AppConfig:
     stop_strategy: str = "both"
     stop_repeat: int = 3
     stop_repeat_gap: float = 0.6
+    # risveglio dallo standby del controller
+    wake_command: str = ";"
+    wake_delay: float = 0.6
+    wake_after_idle: float = 15.0
+    wake_resend: bool = True
     send_move_with_target: bool = False   # AP1 e AM1 separati, con pausa
     command_gap: float = 0.15
     settle_delay: float = 0.20
     rotor_range_start: float = 180.0  # azimut vero del fermo meccanico
     rotor_range_span: float = 360.0
     rotor_offset: float = 0.0
+    rotor_offset_up: float = 0.0
+    rotor_offset_down: float = 0.0
     rotor_speed: float = 6.0          # gradi/secondo
     rotor_min_move: float = 2.0
     rotor_safety_margin: float = 10.0  # gradi da tenere liberi dal fermo
     rotor_read_position: bool = False  # usa AI1; invece della stima
     rotor_poll_interval: float = 1.0
     rotor_stop_on_margin: bool = True
+    # ultima posizione nota del rotore, salvata alla chiusura e ripristinata
+    # all'avvio. None = posizione ignota: la rotazione resta inibita finche'
+    # l'operatore non la dichiara.
+    last_position: Optional[float] = None
     auto_connect: bool = False
 
     # --- automatismo ---

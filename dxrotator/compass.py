@@ -39,6 +39,7 @@ class CompassWidget(QWidget):
         self.stop_bearing: Optional[float] = 180.0
         self.span: float = 360.0
         self.blind: Optional[tuple] = None   # (da_bearing, a_bearing) orario
+        self.known: bool = True              # posizione del rotore dichiarata
         self.moving: bool = False
         self.label: str = ""
         self.setCursor(Qt.CrossCursor)
@@ -49,7 +50,8 @@ class CompassWidget(QWidget):
                   threshold: float, moving: bool, label: str = "",
                   stop_bearing: Optional[float] = None,
                   span: float = 360.0,
-                  blind: Optional[tuple] = None) -> None:
+                  blind: Optional[tuple] = None,
+                  known: bool = True) -> None:
         self.current = normalize_deg(current)
         self.target = None if target is None else normalize_deg(target)
         self.threshold = threshold
@@ -58,6 +60,7 @@ class CompassWidget(QWidget):
         self.stop_bearing = stop_bearing
         self.span = span
         self.blind = blind
+        self.known = known
         self.update()
 
     # ------------------------------------------------------------------
@@ -115,8 +118,8 @@ class CompassWidget(QWidget):
                 p.setBrush(QBrush(QColor(190, 60, 55, 55)))
                 p.drawPath(path)
 
-        # settore della soglia
-        if self.show_threshold and self.threshold > 0:
+        # settore della soglia: ha senso solo attorno a una posizione nota
+        if self.known and self.show_threshold and self.threshold > 0:
             path = QPainterPath()
             path.moveTo(QPointF(cx, cy))
             rect = QRectF(cx - r * 0.94, cy - r * 0.94, 1.88 * r, 1.88 * r)
@@ -182,16 +185,18 @@ class CompassWidget(QWidget):
             p.setBrush(QBrush(tgt_col))
             p.drawPolygon(QPolygonF([tip, a, b]))
 
-        # lancetta corrente
-        pen = QPen(cur_col, 4.0, Qt.SolidLine, Qt.RoundCap)
-        p.setPen(pen)
-        p.drawLine(QPointF(cx, cy), self._pt(cx, cy, r * 0.68, self.current))
-        tip = self._pt(cx, cy, r * 0.80, self.current)
-        a = self._pt(cx, cy, r * 0.64, self.current - 6)
-        b = self._pt(cx, cy, r * 0.64, self.current + 6)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QBrush(cur_col))
-        p.drawPolygon(QPolygonF([tip, a, b]))
+        # lancetta corrente: disegnata solo se la posizione e' nota, altrimenti
+        # indicherebbe un valore inventato
+        if self.known:
+            pen = QPen(cur_col, 4.0, Qt.SolidLine, Qt.RoundCap)
+            p.setPen(pen)
+            p.drawLine(QPointF(cx, cy), self._pt(cx, cy, r * 0.68, self.current))
+            tip = self._pt(cx, cy, r * 0.80, self.current)
+            a = self._pt(cx, cy, r * 0.64, self.current - 6)
+            b = self._pt(cx, cy, r * 0.64, self.current + 6)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(cur_col))
+            p.drawPolygon(QPolygonF([tip, a, b]))
 
         # mozzo
         p.setBrush(QBrush(QColor(45, 52, 62)))
@@ -199,17 +204,29 @@ class CompassWidget(QWidget):
         p.drawEllipse(QPointF(cx, cy), r * 0.20, r * 0.20)
 
         # testo centrale
+        unknown_col = QColor(255, 105, 97)
         f3 = QFont(self.font())
         f3.setBold(True)
         f3.setPointSizeF(max(12.0, r * 0.16))
         p.setFont(f3)
-        p.setPen(QPen(cur_col if not self.moving else QColor(255, 200, 80)))
-        p.drawText(QRectF(cx - r * 0.5, cy - r * 0.22, r, r * 0.28),
-                   Qt.AlignCenter, f"{self.current:03.0f}°")
+        if self.known:
+            p.setPen(QPen(cur_col if not self.moving else QColor(255, 200, 80)))
+            p.drawText(QRectF(cx - r * 0.5, cy - r * 0.22, r, r * 0.28),
+                       Qt.AlignCenter, f"{self.current:03.0f}°")
+        else:
+            p.setPen(QPen(unknown_col))
+            p.drawText(QRectF(cx - r * 0.5, cy - r * 0.22, r, r * 0.28),
+                       Qt.AlignCenter, "– – –")
 
         f4 = QFont(self.font())
         f4.setPointSizeF(max(7.5, r * 0.065))
         p.setFont(f4)
+        if not self.known:
+            p.setPen(QPen(unknown_col))
+            p.drawText(QRectF(cx - r * 0.75, cy + r * 0.06, r * 1.5, r * 0.16),
+                       Qt.AlignCenter, "posizione ignota")
+            p.end()
+            return
         p.setPen(QPen(dim))
         sub = self.label or ("in rotazione" if self.moving else "fermo")
         p.drawText(QRectF(cx - r * 0.6, cy + r * 0.06, r * 1.2, r * 0.16),

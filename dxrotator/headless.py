@@ -29,12 +29,18 @@ def run_headless() -> int:
         stop_strategy=cfg.stop_strategy,
         stop_repeat=cfg.stop_repeat,
         stop_repeat_gap=cfg.stop_repeat_gap,
+        wake_command=cfg.wake_command,
+        wake_delay=cfg.wake_delay,
+        wake_after_idle=cfg.wake_after_idle,
+        wake_resend=cfg.wake_resend,
         send_move_with_target=cfg.send_move_with_target,
         command_gap=cfg.command_gap,
         settle_delay=cfg.settle_delay,
         range_start=cfg.rotor_range_start,
         range_span=cfg.rotor_range_span,
         offset=cfg.rotor_offset,
+        offset_up=cfg.rotor_offset_up,
+        offset_down=cfg.rotor_offset_down,
         speed_deg_s=cfg.rotor_speed,
         min_move=cfg.rotor_min_move,
         safety_margin=cfg.rotor_safety_margin,
@@ -44,6 +50,15 @@ def run_headless() -> int:
     )
     engine.controller._on_event = lambda m: print(f"[rotore] {m}", flush=True)
     engine.controller.connect()
+
+    # posizione salvata alla chiusura precedente: senza, la rotazione resta
+    # inibita finche' non viene scritta in config.json
+    if cfg.last_position is not None:
+        engine.controller.set_current_bearing(float(cfg.last_position))
+    else:
+        print("ATTENZIONE: posizione del rotore ignota, rotazione inibita.\n"
+              "Scrivi il valore in \"last_position\" nel file di configurazione.",
+              flush=True)
 
     q: "queue.Queue" = queue.Queue()
     listeners = []
@@ -98,6 +113,12 @@ def run_headless() -> int:
 
     for l in listeners:
         l.stop()
+    if engine.controller.state.position_known:
+        cfg.last_position = round(engine.controller.current_bearing, 1)
+        try:
+            cfg.save()
+        except Exception as exc:
+            print("Salvataggio della posizione non riuscito:", exc, flush=True)
     engine.controller.disconnect()
     print("Terminato.")
     return 0
