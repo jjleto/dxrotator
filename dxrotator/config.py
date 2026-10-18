@@ -56,11 +56,14 @@ class AppConfig:
     stop_repeat_gap: float = 0.6
     # risveglio dallo standby del controller
     wake_command: str = ";"
-    wake_delay: float = 0.6
+    wake_delay: float = 2.0
     wake_after_idle: float = 15.0
     wake_resend: bool = True
+    # keep-alive: tiene sveglio il controller invece di doverlo risvegliare
+    keepalive_command: str = ""
+    keepalive_interval: float = 5.0
     send_move_with_target: bool = False   # AP1 e AM1 separati, con pausa
-    command_gap: float = 0.15
+    command_gap: float = 1.5
     settle_delay: float = 0.20
     rotor_range_start: float = 180.0  # azimut vero del fermo meccanico
     rotor_range_span: float = 360.0
@@ -146,6 +149,18 @@ class AppConfig:
 
         if not cfg.presets:
             cfg.presets = dict(base.presets)
+
+        # Migrazioni dai default sbagliati delle versioni precedenti.
+        # Si toccano solo i valori lasciati esattamente com'erano: chi li ha
+        # cambiati a mano se li tiene.
+        if "command_gap" in clean and clean["command_gap"] == 0.15:
+            # 0,15 s non basta: il DCU-1 esegue AM1 solo dopo circa un secondo
+            # di silenzio, ed e' la causa storica del "serve il doppio click"
+            cfg.command_gap = base.command_gap
+        if clean.get("keepalive_command") == "AI1;":
+            # provato sul campo: il DCU-1 ignora AI1; cosi' a fondo da non
+            # uscire nemmeno dallo standby, quindi come keep-alive e' inutile
+            cfg.keepalive_command = ""
         return cfg
 
     # ------------------------------------------------------------------

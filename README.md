@@ -115,12 +115,19 @@ configurable, because behaviour varies between units and clones:
   start-up sequence.
 - **`AM1;` is never sent when the rotator is already stopped**, or the brake
   would release for nothing.
-- **Some units go into standby** and spend the first command they receive on
-  waking the display up, discarding its content. The symptom is again having
-  to press twice, but only after a pause. DXRotator sends a harmless `;` first
-  and waits for the unit to wake, and only does so after a configurable period
-  of silence so it adds no traffic during active use. STOP never waits for the
-  wake-up.
+- **Some units go into standby** and spend the first command they receive
+  without executing it. The symptom is again having to press twice, but only
+  after a pause — and it happens with the unit's display already lit, so it is
+  not the display that sleeps but the serial line that has been idle too long.
+  DXRotator sends a harmless `;` first and waits: that `;` is the one the
+  standby eats, so the `AP1xxx;` that follows is actually stored. STOP never
+  waits for the wake-up.
+- **`AM1;` needs about a second of silence before it**, and this is the real
+  reason those units seem to need a double click. Measured on a DCU-1 with its
+  display off, changing nothing but the pause: ignored at 0.15 s and at 0.5 s,
+  executed at 1.0 s and at 1.5 s. The default pause is 1.5 s. Sending
+  `AP1xxx;AM1;` glued together on the same unit does not even light the
+  display up.
 - **Positioning is not exact, and not symmetric.** Expect a few degrees of
   error from the potentiometer, a long control cable and the antenna's
   inertia — and expect it to differ with the direction of travel, because
@@ -239,7 +246,7 @@ python tools/send_test.py demo                  # six stations around the globe
 python -m unittest discover -s tests -v
 ```
 
-92 tests covering great-circle bearings against known references, Maidenhead
+103 tests covering great-circle bearings against known references, Maidenhead
 round-trips, DXCC resolution, mechanical-stop geometry, the safety margin, the
 byte-level format of DCU-1 commands, the stop strategies, band classification
 and the WSJT-X / N1MM packet decoders.

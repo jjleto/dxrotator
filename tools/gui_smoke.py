@@ -61,8 +61,11 @@ def main() -> int:
         "posizione data per nota senza dichiararla"
     assert not win.b_go.isEnabled(), "RUOTA attivo a posizione ignota"
     win._rotate(180.0, "prova")
-    assert win.engine.controller.transport.sent == [], \
-        "comando inviato a posizione ignota"
+    # il keep-alive e' traffico innocuo e continuo: qui interessa solo che non
+    # sia partito un comando di rotazione
+    inviati = [s for s in win.engine.controller.transport.sent
+               if s != cfg.keepalive_command]
+    assert inviati == [], "comando inviato a posizione ignota"
 
     # dichiarandola si sblocca tutto
     win.s_calib.setValue(60)

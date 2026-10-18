@@ -428,6 +428,9 @@ class TestPositionKnown(unittest.TestCase):
 
     def _ctrl(self, **kw):
         kw.setdefault("wake_command", "")
+        # qui si prova l'inibizione: il keep-alive e' traffico innocuo che
+        # sporcherebbe il confronto, e non c'entra con la posizione
+        kw.setdefault("keepalive_command", "")
         c = rotor.Dcu1Controller(rotor.RotorConfig(**kw),
                                  transport=rotor.SimulatedTransport())
         c.connect()
@@ -921,6 +924,9 @@ class TestWakeFromStandby(unittest.TestCase):
         kw.setdefault("wake_delay", 0.0)
         kw.setdefault("wake_resend", False)
         kw.setdefault("send_move_with_target", True)
+        # il risveglio va provato da solo: con il keep-alive attivo la linea
+        # non e' mai ferma e il risveglio non scatta mai, che e' il suo scopo
+        kw.setdefault("keepalive_command", "")
         c = rotor.Dcu1Controller(rotor.RotorConfig(**kw),
                                  transport=rotor.SimulatedTransport())
         c.connect()
@@ -977,6 +983,121 @@ class TestWakeFromStandby(unittest.TestCase):
         t.sent.clear()
         c.stop(blocking=True)
         self.assertEqual(t.sent, [";"])
+
+
+class TestKeepAlive(unittest.TestCase):
+    """
+    Il keep-alive previene lo standby invece di curarlo: manda a intervalli
+    regolari un comando che il DCU-1 ignora, cosi' il primo comando utile non
+    cade mai su una linea ferma da minuti.
+    """
+
+    def _ctrl(self, **kw):
+        kw.setdefault("keepalive_command", "AI1;")   # per default e' spento
+        kw.setdefault("keepalive_interval", 1.0)
+        kw.setdefault("wake_command", "")
+        c = rotor.Dcu1Controller(rotor.RotorConfig(**kw),
+                                 transport=rotor.SimulatedTransport())
+        c.connect()
+        return c, c.transport
+
+    def tearDown(self):
+        # i thread sono daemon, ma e' bene non lasciarli girare fra un test
+        # e l'altro: falserebbero i conteggi del successivo
+        for c in getattr(self, "_created", []):
+            c.disconnect()
+
+    def test_primes_the_link_right_after_connecting(self):
+        # il primo comando utile non deve mai essere il primo byte che il
+        # controller vede: e' quello che si perdeva
+        c, t = self._ctrl()
+        self._created = [c]
+        time.sleep(0.3)
+        self.assertEqual(t.sent, ["AI1;"])
+
+    def test_repeats_while_the_line_stays_silent(self):
+        c, t = self._ctrl()
+        self._created = [c]
+        time.sleep(1.8)
+        self.assertGreaterEqual(len(t.sent), 2)
+        self.assertTrue(all(s == "AI1;" for s in t.sent))
+
+    def test_empty_command_disables_it(self):
+        c, t = self._ctrl(keepalive_command="")
+        self._created = [c]
+        time.sleep(0.6)
+        self.assertEqual(t.sent, [])
+
+    def test_does_not_pollute_log_or_last_command(self):
+        # altrimenti il registro diventerebbe illeggibile: una riga ogni 5 s
+        c, _ = self._ctrl()
+        self._created = [c]
+        time.sleep(0.3)
+        self.assertEqual(c.state.last_command, "")
+        # la riga di avvio ("Keep-alive attivo...") ci sta; le trasmissioni no
+        self.assertFalse(any(r.startswith("TX:") for r in c.state.history))
+
+    def test_never_stops_a_rotation_in_progress(self):
+        # se qualcuno configurasse ';' come keep-alive, a rotore in movimento
+        # sarebbe un comando di arresto: non va mandato
+        c, t = self._ctrl(keepalive_command=";", keepalive_interval=1.0)
+        self._created = [c]
+        c.set_current_bearing(100.0)
+        time.sleep(0.3)
+        c.goto(200.0, force=True)
+        self.assertTrue(c.state.moving)
+        t.sent.clear()
+        time.sleep(1.5)
+        self.assertEqual(t.sent, [], "keep-alive inviato durante la rotazione")
+
+    def test_does_not_suppress_the_wake_up(self):
+        # il keep-alive non deve passare per attivita' utile: lo faceva nella
+        # 1.12.0 e il risveglio non scattava piu', senza nulla al suo posto
+        c = rotor.Dcu1Controller(
+            rotor.RotorConfig(keepalive_command="AI1;", keepalive_interval=1.0,
+                              wake_command=";", wake_after_idle=0.5,
+                              wake_delay=0.0, wake_resend=False,
+                              send_move_with_target=True),
+            transport=rotor.SimulatedTransport())
+        c.connect()
+        self._created = [c]
+        c.set_current_bearing(100.0)
+        time.sleep(1.2)                 # il keep-alive ha trasmesso di sicuro
+        t = c.transport
+        t.sent.clear()
+        c.goto(200.0, force=True)
+        self.assertEqual(t.sent[0], ";", "risveglio soppresso dal keep-alive")
+
+    def test_a_real_command_postpones_the_keepalive(self):
+        c, t = self._ctrl(keepalive_interval=5.0)
+        self._created = [c]
+        c.set_current_bearing(100.0)
+        time.sleep(0.3)
+        t.sent.clear()
+        c.goto(200.0, force=True)
+        time.sleep(0.8)
+        self.assertNotIn("AI1;", t.sent)
+
+
+class TestConfigMigrations(unittest.TestCase):
+    """I default sbagliati delle versioni vecchie vanno corretti al caricamento."""
+
+    def test_old_command_gap_is_raised(self):
+        c = AppConfig.from_dict({"command_gap": 0.15})
+        self.assertEqual(c.command_gap, AppConfig().command_gap)
+        self.assertGreaterEqual(c.command_gap, 1.0)
+
+    def test_a_deliberate_gap_is_respected(self):
+        c = AppConfig.from_dict({"command_gap": 0.4})
+        self.assertEqual(c.command_gap, 0.4)
+
+    def test_useless_keepalive_is_cleared(self):
+        c = AppConfig.from_dict({"keepalive_command": "AI1;"})
+        self.assertEqual(c.keepalive_command, "")
+
+    def test_another_keepalive_is_kept(self):
+        c = AppConfig.from_dict({"keepalive_command": "C\r"})
+        self.assertEqual(c.keepalive_command, "C\r")
 
 
 class TestStatusClearedOnEmptyCall(unittest.TestCase):

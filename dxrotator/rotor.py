@@ -55,7 +55,11 @@ class RotorConfig:
 
     terminator: str = ";"             # terminatore comandi
     send_move_with_target: bool = True  # invia "AP1xxx;AM1;" in un colpo solo
-    command_gap: float = 0.15         # pausa fra AP1 e AM1 quando separati
+    # Pausa fra AP1 e AM1. NON e' un dettaglio di stile: su un DCU-1 reale
+    # l'AM1 viene eseguito solo se arriva dopo circa un secondo di silenzio.
+    # Misurato: a 0,15 s e a 0,5 s il comando viene ignorato, a 1,0 s e a
+    # 1,5 s parte. Sotto il secondo si torna al doppio click.
+    command_gap: float = 1.5          # pausa fra AP1 e AM1 quando separati
     settle_delay: float = 0.20        # attesa dopo l'apertura della porta
     stop_command: str = ";"           # comando di arresto
     # come fermare il rotore:
@@ -74,9 +78,18 @@ class RotorConfig:
     # allora prima un comando innocuo (';', che a rotore fermo non fa nulla),
     # si attende che il controller sia sveglio, e solo dopo il comando vero.
     wake_command: str = ";"           # vuoto = risveglio disattivato
-    wake_delay: float = 0.6           # attesa dopo il comando di risveglio
+    wake_delay: float = 2.0           # attesa dopo il comando di risveglio
     wake_after_idle: float = 15.0     # sveglia solo dopo tanti secondi di silenzio
     wake_resend: bool = True          # dopo un risveglio manda il comando due volte
+
+    # Keep-alive: disattivato per default. L'idea era tenere la linea sempre
+    # calda con "AI1;", che il DCU-1 ignora. Provato sul campo: lo ignora cosi'
+    # a fondo da non uscire nemmeno dallo standby, quindi come keep-alive non
+    # serve a niente. Resta disponibile per altri controller. Il traffico di
+    # keep-alive non conta come attivita' per il risveglio, altrimenti lo
+    # sopprimerebbe senza sostituirlo. Non viene scritto nel registro.
+    keepalive_command: str = ""       # vuoto = keep-alive disattivato
+    keepalive_interval: float = 5.0   # secondi di silenzio prima di rinfrescare
 
     # geometria / meccanica
     range_start: float = 180.0        # bearing del fermo meccanico (180 = Nord centrato)
@@ -440,6 +453,7 @@ class Dcu1Controller:
         # Non si usa 0.0: time.monotonic() parte dall'avvio della macchina,
         # e la differenza darebbe giorni di finta inattivita'.
         self._last_tx_at: Optional[float] = None
+        self._last_keepalive_at: Optional[float] = None
 
     # -- eventi -----------------------------------------------------------
     def _emit(self, msg: str) -> None:
@@ -500,20 +514,32 @@ class Dcu1Controller:
         return self._transport
 
     # -- comandi ----------------------------------------------------------
-    def _send(self, payload: str) -> bool:
+    def _send(self, payload: str, quiet: bool = False) -> bool:
+        """
+        Trasmette `payload`. Con `quiet=True` non scrive nel registro e non
+        tocca `last_command`: serve al keep-alive, che altrimenti riempirebbe
+        il log di righe inutili ogni pochi secondi.
+        """
         if self._transport is None or not self._transport.is_open:
             self.state.last_error = "non connesso"
-            self._emit(f"NON INVIATO ({payload}): rotore non connesso")
+            if not quiet:
+                self._emit(f"NON INVIATO ({payload}): rotore non connesso")
             return False
         try:
             self._transport.write(payload.encode("ascii", "replace"))
-            self.state.last_command = payload
-            self._last_tx_at = time.monotonic()
-            self._emit(f"TX: {payload}")
+            if quiet:
+                # il keep-alive non e' attivita' utile: se aggiornasse
+                # _last_tx_at sopprimerebbe il risveglio senza sostituirlo
+                self._last_keepalive_at = time.monotonic()
+            else:
+                self._last_tx_at = time.monotonic()
+                self.state.last_command = payload
+                self._emit(f"TX: {payload}")
             return True
         except Exception as exc:
             self.state.last_error = str(exc)
-            self._emit(f"ERRORE TX: {exc}")
+            if not quiet:
+                self._emit(f"ERRORE TX: {exc}")
             return False
 
     def goto(self, bearing: float, force: bool = False) -> bool:
@@ -818,6 +844,31 @@ class Dcu1Controller:
             else:
                 self._margin_hits = 0
 
+    def _keepalive_due(self) -> bool:
+        """True se il collegamento e' rimasto in silenzio troppo a lungo."""
+        if not self.cfg.keepalive_command or not self.state.connected:
+            return False
+        # non usare mai come keep-alive un comando che fermerebbe il rotore
+        if (self.state.moving
+                and self.cfg.keepalive_command == self.cfg.stop_command):
+            return False
+        last = max([t for t in (self._last_tx_at, self._last_keepalive_at)
+                    if t is not None], default=None)
+        if last is None:
+            # appena connessi: si manda subito, cosi' il primo comando utile
+            # non e' mai il primo byte che il controller vede
+            return True
+        return (time.monotonic() - last) >= max(1.0, self.cfg.keepalive_interval)
+
+    def _loop_wait(self) -> float:
+        """Passo del thread di servizio, in secondi."""
+        waits = []
+        if self.cfg.read_position:
+            waits.append(self.cfg.poll_interval)
+        if self.cfg.keepalive_command:
+            waits.append(max(1.0, self.cfg.keepalive_interval) / 2.0)
+        return max(0.2, min(waits)) if waits else 1.0
+
     def _poll_loop(self) -> None:
         while not self._poll_stop.is_set():
             if self.cfg.read_position and self.state.connected:
@@ -829,19 +880,25 @@ class Dcu1Controller:
                     if self.state.reading:
                         self._emit("Lettura di posizione persa: torno alla stima")
                     self.state.reading = False
-            self._poll_stop.wait(max(0.2, self.cfg.poll_interval))
+            elif self._keepalive_due():
+                self._send(self.cfg.keepalive_command, quiet=True)
+            self._poll_stop.wait(self._loop_wait())
 
     def start_polling(self) -> None:
         self.stop_polling()
-        if not self.cfg.read_position:
+        if not self.cfg.read_position and not self.cfg.keepalive_command:
             return
         self._poll_stop.clear()
         self.state.read_failures = 0
         self._poll_thread = threading.Thread(target=self._poll_loop,
                                              daemon=True, name="dcu1-poll")
         self._poll_thread.start()
-        self._emit(f"Lettura di posizione attiva (AI1; ogni "
-                   f"{self.cfg.poll_interval:.1f} s)")
+        if self.cfg.read_position:
+            self._emit(f"Lettura di posizione attiva (AI1; ogni "
+                       f"{self.cfg.poll_interval:.1f} s)")
+        else:
+            self._emit(f"Keep-alive attivo ({self.cfg.keepalive_command} "
+                       f"ogni {max(1.0, self.cfg.keepalive_interval):.0f} s)")
 
     def stop_polling(self) -> None:
         self._poll_stop.set()

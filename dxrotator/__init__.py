@@ -6,5 +6,5 @@ Multipiattaforma: Windows, macOS, Linux.
 Licenza MIT.
 """
 
-__version__ = "1.11.0"
+__version__ = "1.13.0"
 __all__ = ["geo", "dxcc", "rotor", "sources", "engine", "config"]

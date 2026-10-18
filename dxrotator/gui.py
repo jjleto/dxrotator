@@ -206,12 +206,14 @@ class SettingsDialog(QDialog):
             self.cb_stopmode.setCurrentIndex(keys.index(self.cfg.stop_strategy))
         self.c_combined = QCheckBox("Invia \"AP1xxx;AM1;\" in un unico messaggio")
         self.c_combined.setChecked(self.cfg.send_move_with_target)
-        self.s_gap = QDoubleSpinBox(); self.s_gap.setRange(0.0, 2.0)
+        self.s_gap = QDoubleSpinBox(); self.s_gap.setRange(0.0, 5.0)
         self.s_gap.setDecimals(2); self.s_gap.setSingleStep(0.05)
         self.s_gap.setValue(self.cfg.command_gap)
-        self.s_gap.setToolTip("Pausa fra AP1 e AM1 quando sono separati. "
-                              "Se il rotore parte solo al secondo comando, "
-                              "aumentala.")
+        self.s_gap.setToolTip(
+            "Pausa fra AP1 e AM1 quando sono separati. Su un DCU-1 reale "
+            "l'AM1 viene eseguito solo se arriva dopo circa un secondo di "
+            "silenzio: misurato, a 0,5 s viene ignorato e a 1,0 s parte. "
+            "Se il rotore parte solo al secondo comando, aumentala.")
 
         self.s_start = QDoubleSpinBox(); self.s_start.setRange(0, 359)
         self.s_start.setValue(self.cfg.rotor_range_start)
@@ -277,6 +279,20 @@ class SettingsDialog(QDialog):
                                       "(equivale al doppio click)")
         self.c_wakeresend.setChecked(self.cfg.wake_resend)
         f.addRow("", self.c_wakeresend)
+
+        self.e_keepalive = QLineEdit(self.cfg.keepalive_command)
+        self.e_keepalive.setToolTip(
+            "Comando ignorato dal controller, inviato a intervalli regolari "
+            "per non lasciare mai la linea ferma: cosi' il controller non va "
+            "in standby e il primo comando utile non va perso. "
+            "'AI1;' e' l'ideale sul DCU-1, che lo ignora del tutto. "
+            "Vuoto = keep-alive disattivato.")
+        self.s_keepalive = QDoubleSpinBox(); self.s_keepalive.setRange(1.0, 120.0)
+        self.s_keepalive.setDecimals(0); self.s_keepalive.setSingleStep(1)
+        self.s_keepalive.setValue(self.cfg.keepalive_interval)
+        f.addRow("Keep-alive:", self.e_keepalive)
+        f.addRow("  ogni quanti secondi:", self.s_keepalive)
+
         f.addRow("", self.c_combined)
         f.addRow("Pausa fra AP1 e AM1 (s):", self.s_gap)
         f.addRow("Fermo meccanico (°):", self.s_start)
@@ -467,6 +483,8 @@ class SettingsDialog(QDialog):
         cfg.wake_delay = self.s_wakedelay.value()
         cfg.wake_after_idle = self.s_wakeidle.value()
         cfg.wake_resend = self.c_wakeresend.isChecked()
+        cfg.keepalive_command = self.e_keepalive.text()
+        cfg.keepalive_interval = self.s_keepalive.value()
         cfg.send_move_with_target = self.c_combined.isChecked()
         cfg.command_gap = self.s_gap.value()
         cfg.rotor_range_start = self.s_start.value()
@@ -908,6 +926,8 @@ class MainWindow(QMainWindow):
             wake_delay=c.wake_delay,
             wake_after_idle=c.wake_after_idle,
             wake_resend=c.wake_resend,
+            keepalive_command=c.keepalive_command,
+            keepalive_interval=c.keepalive_interval,
             send_move_with_target=c.send_move_with_target,
             command_gap=c.command_gap,
             settle_delay=c.settle_delay,

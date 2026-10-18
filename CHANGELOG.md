@@ -3,6 +3,52 @@
 Tutte le versioni sono state provate su un impianto reale: Hy-Gain T2X con
 controller DCU-1, macOS, WSJT-X e N1MM+.
 
+## 1.13.0
+
+- **Trovata la causa del doppio click, e misurata.** Cinque sequenze provate
+  sullo stesso DCU-1, a display spento, cambiando solo la pausa prima di
+  `AM1;`:
+
+  | pausa | risultato |
+  |---|---|
+  | tutto attaccato | il display non si accende nemmeno |
+  | 0,15 s | ignorato |
+  | 0,5 s | ignorato |
+  | 1,0 s | eseguito |
+  | 1,5 s | eseguito |
+
+  Il DCU-1 esegue `AM1;` solo se arriva dopo **circa un secondo di silenzio**.
+  La pausa di 0,15 s usata fin qui era dieci volte troppo corta: ecco perché
+  servivano due click. Il nuovo default è **1,5 s**, e chi aveva lasciato
+  0,15 se lo ritrova aggiornato al caricamento (un valore scelto a mano resta
+  com'è).
+- La pausa regolabile in Impostazioni arriva ora fino a 5 s.
+- **Keep-alive disattivato per default.** `AI1;` il DCU-1 lo ignora così a
+  fondo da non uscire nemmeno dallo standby: come keep-alive non serviva a
+  niente, e in più *sopprimeva il risveglio* facendo sembrare la 1.12.0
+  peggiore della 1.11.0. Resta disponibile per altri controller.
+- Il traffico di keep-alive non conta più come attività utile: non può più
+  impedire al risveglio di scattare.
+
+## 1.12.0
+
+- **Keep-alive: il controller non va più in standby.** Il risveglio
+  introdotto nella 1.5.0 curava il sintomo *dopo*: mandava un comando innocuo
+  e poi ripeteva quello vero. Restava però il caso in cui il primo click non
+  faceva partire nulla lo stesso, anche con il display del controller già
+  acceso — segno che il problema non è il display ma la linea seriale ferma
+  da minuti. Adesso DXRotator manda ogni pochi secondi `AI1;`, un comando che
+  il DCU-1 ignora completamente (non risponde e non muove nulla): la linea non
+  è mai ferma e il primo comando utile non è mai il primo byte che il
+  controller vede. Il keep-alive parte subito alla connessione, non compare
+  nel registro, e non viene inviato durante una rotazione se è stato
+  configurato con lo stesso comando dell'arresto.
+- Due campi nuovi in Impostazioni → Rotore: **Keep-alive** (vuoto =
+  disattivato) e **ogni quanti secondi** (5 s di default).
+- L'attesa dopo il comando di risveglio sale da 0,6 a **2 secondi**: 0,6 non
+  bastavano a un DCU-1 che si stava ancora svegliando. Conta solo quando il
+  keep-alive è disattivato.
+
 ## 1.11.0
 
 - **Correzione dell'azimut separata per verso di marcia.** L'errore di

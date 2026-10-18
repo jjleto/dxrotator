@@ -33,6 +33,8 @@ def run_headless() -> int:
         wake_delay=cfg.wake_delay,
         wake_after_idle=cfg.wake_after_idle,
         wake_resend=cfg.wake_resend,
+        keepalive_command=cfg.keepalive_command,
+        keepalive_interval=cfg.keepalive_interval,
         send_move_with_target=cfg.send_move_with_target,
         command_gap=cfg.command_gap,
         settle_delay=cfg.settle_delay,

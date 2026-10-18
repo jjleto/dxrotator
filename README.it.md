@@ -102,12 +102,27 @@ controller preferisce i due comandi separati, togli la spunta a
 Il terminatore e il comando di stop sono configurabili, perché alcuni cloni
 usano `\r` al posto di `;`.
 
-**Standby.** Alcuni DCU-1 dopo un po' di inattività spengono il display e
-consumano il primo comando ricevuto per riaccendersi, ignorandone il
-contenuto: il sintomo è dover premere due volte. DXRotator manda prima un `;`
-innocuo e aspetta che il controller sia sveglio, ma solo dopo un periodo di
-silenzio configurabile, così durante l'uso attivo non aggiunge traffico.
-Lo STOP non passa mai per il risveglio.
+**Standby.** Alcuni DCU-1 dopo un po' di inattività consumano il primo comando
+ricevuto senza eseguirlo: il sintomo è dover premere due volte. Succede anche
+con il display del controller già acceso, quindi non è il display a dormire ma
+la linea seriale a essere rimasta ferma troppo a lungo.
+
+DXRotator lo affronta su due fronti:
+
+* **Risveglio.** Prima del comando vero manda un `;` innocuo e aspetta che il
+  controller sia sveglio: quel `;` viene sacrificato allo standby, così
+  l'`AP1xxx;` che segue viene davvero memorizzato. Lo STOP non passa mai per
+  il risveglio.
+* **Pausa prima di `AM1;`.** Qui sta la causa vera del doppio click, ed è
+  misurata: il DCU-1 esegue `AM1;` solo se arriva dopo **circa un secondo di
+  silenzio**. Provato a display spento, a parità di tutto il resto, a 0,15 s
+  e a 0,5 s il comando viene ignorato, a 1,0 s e a 1,5 s parte. Il default è
+  1,5 s. Inviare `AP1xxx;AM1;` attaccati, sullo stesso esemplare, non accende
+  nemmeno il display.
+* **Keep-alive** (disattivato per default). L'idea era tenere la linea sempre
+  calda con `AI1;`. Provato sul campo: il DCU-1 lo ignora così a fondo da non
+  uscire nemmeno dallo standby, quindi non serve. Resta configurabile per
+  altri controller.
 
 ### Posizione corrente: letta o stimata
 
@@ -391,7 +406,7 @@ dxrotator/
 ├── gui.py        finestra principale e impostazioni (PySide6)
 └── headless.py   modalità senza GUI
 tools/send_test.py  simulatore WSJT-X / N1MM
-tests/test_all.py   92 test (geo, DXCC, DCU-1, arresto, risveglio,
+tests/test_all.py  103 test (geo, DXCC, DCU-1, arresto, risveglio, keep-alive,
                     bande, posizione, protocolli UDP)
 ```
 
