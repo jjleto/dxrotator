@@ -19,6 +19,7 @@ Opzioni:
 from __future__ import annotations
 
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -55,6 +56,34 @@ def _icon() -> str | None:
     name = "icon.ico" if sys.platform.startswith("win") else "icon.png"
     path = os.path.join(HERE, name)
     return path if os.path.exists(path) else None
+
+
+def _fix_macos_bundle(app: str) -> None:
+    """Completa l'Info.plist del bundle e lo rifirma.
+
+    - NSAppSleepDisabled: macOS non mette DXRotator in App Nap quando non è
+      in primo piano (timer rallentati = rotazione che parte in ritardo).
+    - Versione reale al posto dello 0.0.0 lasciato da PyInstaller.
+
+    Cambiare l'Info.plist invalida la firma ad hoc di PyInstaller: su Apple
+    Silicon un bundle con firma non valida non parte, quindi si rifirma.
+    """
+    plist = os.path.join(app, "Contents", "Info.plist")
+    with open(plist, "rb") as fh:
+        info = plistlib.load(fh)
+    info["NSAppSleepDisabled"] = True
+    info["CFBundleShortVersionString"] = _version()
+    info["CFBundleVersion"] = _version()
+    with open(plist, "wb") as fh:
+        plistlib.dump(info, fh)
+    print(f"Info.plist: NSAppSleepDisabled, versione {_version()}")
+    try:
+        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", app],
+                       check=True)
+        print("Bundle rifirmato (firma ad hoc)")
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        print(f"ATTENZIONE: rifirma non riuscita ({exc}).")
+        print(f"  Esegui a mano:  codesign --force --deep --sign - '{app}'")
 
 
 def main() -> int:
@@ -111,6 +140,7 @@ def main() -> int:
     print()
     if sys.platform == "darwin" and not force_onefile:
         app = os.path.join(HERE, "dist", f"{APP_NAME}.app")
+        _fix_macos_bundle(app)
         print(f"Fatto: {app}")
         print("Trascinala in Applicazioni. Al primo avvio, se macOS la blocca,")
         print("aprila con tasto destro → Apri, oppure esegui:")

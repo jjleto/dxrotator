@@ -19,6 +19,8 @@ from .sources import N1mmDecoder, UdpListener, WsjtxDecoder
 
 
 def run_headless() -> int:
+    from .macos import disable_app_nap
+    disable_app_nap()
     cfg = AppConfig.load()
     engine = RotatorEngine(cfg)
     engine.controller.cfg = RotorConfig(

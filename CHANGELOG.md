@@ -3,6 +3,18 @@
 Tutte le versioni sono state provate su un impianto reale: Hy-Gain T2X con
 controller DCU-1, macOS, WSJT-X e N1MM+.
 
+## 1.14.0
+
+- **App Nap disattivato su macOS.** Con DXRotator ridotta a icona o coperta da
+  altre finestre, macOS rallentava timer e thread dell'app: i comandi al
+  rotore potevano partire in ritardo e la pausa di 1,5 s prima di `AM1;`
+  diventare più lunga del previsto. Ora l'app apre all'avvio una activity di
+  `NSProcessInfo` (modulo `dxrotator/macos.py`, via ctypes, nessuna nuova
+  dipendenza), che vale anche lanciando da sorgente.
+- `build.py` scrive nell'Info.plist del bundle `NSAppSleepDisabled` e la
+  versione reale (prima risultava 0.0.0), poi rifirma il bundle ad hoc.
+- Su Windows e Linux non cambia nulla.
+
 ## 1.13.0
 
 - **Trovata la causa del doppio click, e misurata.** Cinque sequenze provate

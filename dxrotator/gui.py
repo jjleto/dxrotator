@@ -1485,6 +1485,8 @@ class MainWindow(QMainWindow):
 
 def run() -> int:
     import sys
+    from .macos import disable_app_nap
+    disable_app_nap()
     app = QApplication(sys.argv)
     app.setApplicationName("DXRotator")
     cfg = AppConfig.load()

@@ -1146,5 +1146,17 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg.my_locator, "AA00")
 
 
+class TestMacOS(unittest.TestCase):
+
+    def test_app_nap_safe_everywhere(self):
+        from dxrotator import macos
+        result = macos.disable_app_nap()
+        if sys.platform == "darwin":
+            self.assertTrue(result)
+            self.assertTrue(macos.disable_app_nap())   # seconda chiamata innocua
+        else:
+            self.assertFalse(result)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
